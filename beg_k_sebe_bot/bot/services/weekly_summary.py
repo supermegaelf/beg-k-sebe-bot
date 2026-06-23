@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
+from beg_k_sebe_bot.bot.database.models import DailyCheckin, MovementFormatChange, User
 from beg_k_sebe_bot.bot.services.movement_calc import total_movement
 from beg_k_sebe_bot.bot.texts import messages as msg
 
@@ -28,14 +28,22 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
     if not users:
         return
 
+    user_ids = [u.telegram_id for u in users]
+
     checkins_result = await session.execute(
         select(DailyCheckin).where(
             DailyCheckin.date >= effective_start,
             DailyCheckin.date <= date.today(),
             DailyCheckin.status == "answered",
+            DailyCheckin.user_id.in_(user_ids),
         )
     )
     answered_checkins = checkins_result.scalars().all()
+
+    format_changes_result = await session.execute(
+        select(MovementFormatChange).where(MovementFormatChange.user_id.in_(user_ids))
+    )
+    all_format_changes = format_changes_result.scalars().all()
 
     total_min_walk = 0.0
     total_min_run = 0.0
@@ -45,7 +53,8 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
         user_checkins = [c for c in answered_checkins if c.user_id == user.telegram_id]
         if not user_checkins:
             continue
-        totals = total_movement(user_checkins, user.format_changes, user.movement_format or "walk_22min")
+        user_format_changes = [fc for fc in all_format_changes if fc.user_id == user.telegram_id]
+        totals = total_movement(user_checkins, user_format_changes, user.movement_format or "walk_22min")
         total_min_walk += totals["min_walk"]
         total_min_run += totals["min_run"]
         total_km_run += totals["km_run"]

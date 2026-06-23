@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.models import MovementFormatChange, User
+from beg_k_sebe_bot.bot.utils.program import current_program_day
 
 router = Router()
 
@@ -21,11 +22,6 @@ def _format_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=label, callback_data=f"chfmt:{key}")]
         for key, label in FORMAT_LABELS.items()
     ])
-
-
-def _current_program_day() -> int:
-    delta = (date.today() - settings.start_date).days + 1
-    return max(1, delta)
 
 
 @router.message(Command("change_format"))
@@ -57,7 +53,7 @@ async def handle_format_change(callback: CallbackQuery, session: AsyncSession) -
         user_id=callback.from_user.id,
         old_format=user.movement_format,
         new_format=new_format,
-        changed_on_day=_current_program_day(),
+        changed_on_day=current_program_day(),
         changed_at=datetime.now(timezone.utc),
     )
     session.add(change)

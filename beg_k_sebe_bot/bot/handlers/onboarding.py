@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from aiogram import Router, F
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.models import User, MovementFormatChange
 from beg_k_sebe_bot.bot.texts import messages as msg
+from beg_k_sebe_bot.bot.utils.validators import parse_wheel_value
 
 router = Router()
 
@@ -91,7 +92,7 @@ async def handle_format(callback: CallbackQuery, state: FSMContext, session: Asy
 
 @router.message(OnboardingStates.waiting_wheel_a_money)
 async def handle_wheel_a_money(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = _parse_wheel_value(message.text)
+    value = parse_wheel_value(message.text)
     if value is None:
         await message.answer(msg.WHEEL_INVALID)
         return
@@ -104,7 +105,7 @@ async def handle_wheel_a_money(message: Message, state: FSMContext, session: Asy
 
 @router.message(OnboardingStates.waiting_wheel_a_relationships)
 async def handle_wheel_a_relationships(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = _parse_wheel_value(message.text)
+    value = parse_wheel_value(message.text)
     if value is None:
         await message.answer(msg.WHEEL_INVALID)
         return
@@ -117,7 +118,7 @@ async def handle_wheel_a_relationships(message: Message, state: FSMContext, sess
 
 @router.message(OnboardingStates.waiting_wheel_a_health)
 async def handle_wheel_a_health(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = _parse_wheel_value(message.text)
+    value = parse_wheel_value(message.text)
     if value is None:
         await message.answer(msg.WHEEL_INVALID)
         return
@@ -127,11 +128,3 @@ async def handle_wheel_a_health(message: Message, state: FSMContext, session: As
     await session.commit()
     await state.clear()
     await message.answer(msg.ONBOARDING_COMPLETE)
-
-
-def _parse_wheel_value(text: str) -> int | None:
-    try:
-        v = int(text.strip())
-        return v if 1 <= v <= 10 else None
-    except ValueError:
-        return None

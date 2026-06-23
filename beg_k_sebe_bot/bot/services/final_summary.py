@@ -33,7 +33,6 @@ async def build_final_summary(user: User, session: AsyncSession) -> str:
 
 
 def _build_fallback(user: User, lived_days: int) -> str:
-    days_word = pluralize(lived_days, "день", "дня", "дней")
     text = msg.FINAL_FALLBACK_HEADER
     text += msg.FINAL_WHEEL_HEADER
     text += _wheel_deltas(user)
