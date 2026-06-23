@@ -1,0 +1,162 @@
+import logging
+from datetime import date, datetime, timezone
+from aiogram import Bot
+from aiogram.fsm.storage.memory import MemoryStorage
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.date import DateTrigger
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from beg_k_sebe_bot.bot.config import settings
+from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal
+from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
+
+logger = logging.getLogger(__name__)
+
+
+async def _send_daily_checkins(bot: Bot, storage: MemoryStorage) -> None:
+    today = date.today()
+    if today < settings.start_date or today > settings.final_date:
+        return
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(User.onboarding_completed_at.is_not(None))
+        )
+        users = result.scalars().all()
+
+        for user in users:
+            if user.joined_at and user.joined_at.date() > today:
+                continue
+
+            from aiogram.fsm.context import FSMContext
+            from aiogram.fsm.storage.base import StorageKey
+            key = StorageKey(bot_id=bot.id, chat_id=user.telegram_id, user_id=user.telegram_id)
+            state = FSMContext(storage=storage, key=key)
+            current = await state.get_state()
+            if current is not None:
+                continue
+
+            from beg_k_sebe_bot.bot.handlers.daily_checkin import send_checkin
+            try:
+                await send_checkin(user.telegram_id, bot, session)
+            except Exception as e:
+                logger.error("Failed to send checkin to %d: %s", user.telegram_id, e)
+
+            if today == settings.start_date + __import__("datetime").timedelta(days=29):
+                try:
+                    from beg_k_sebe_bot.bot.texts import messages as msg
+                    await bot.send_message(user.telegram_id, msg.DAY_30_WARNING)
+                except Exception as e:
+                    logger.error("Failed to send day30 warning to %d: %s", user.telegram_id, e)
+
+
+async def _send_reminders(bot: Bot) -> None:
+    today = date.today()
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(DailyCheckin).where(
+                DailyCheckin.date == today,
+                DailyCheckin.status == "pending",
+                DailyCheckin.reminder_sent == False,  # noqa: E712
+            )
+        )
+        checkins = result.scalars().all()
+        for checkin in checkins:
+            try:
+                from beg_k_sebe_bot.bot.texts import messages as msg
+                await bot.send_message(checkin.user_id, msg.REMINDER)
+                checkin.reminder_sent = True
+                await session.commit()
+            except Exception as e:
+                logger.error("Failed to send reminder to %d: %s", checkin.user_id, e)
+
+
+async def _mark_missed() -> None:
+    today = date.today()
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(DailyCheckin).where(
+                DailyCheckin.date == today,
+                DailyCheckin.status == "pending",
+            )
+        )
+        for checkin in result.scalars().all():
+            checkin.status = "missed"
+        await session.commit()
+
+
+async def _send_weekly_summary(bot: Bot) -> None:
+    async with AsyncSessionLocal() as session:
+        from beg_k_sebe_bot.bot.services.weekly_summary import send_weekly_summary
+        await send_weekly_summary(bot, session)
+
+
+async def _trigger_final(bot: Bot, storage: MemoryStorage) -> None:
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(User).where(
+                User.onboarding_completed_at.is_not(None),
+                User.final_sent == False,  # noqa: E712
+            )
+        )
+        users = result.scalars().all()
+        for user in users:
+            from aiogram.fsm.context import FSMContext
+            from aiogram.fsm.storage.base import StorageKey
+            key = StorageKey(bot_id=bot.id, chat_id=user.telegram_id, user_id=user.telegram_id)
+            state = FSMContext(storage=storage, key=key)
+            from beg_k_sebe_bot.bot.handlers.final import send_final
+            try:
+                await send_final(user.telegram_id, bot, state, session)
+            except Exception as e:
+                logger.error("Failed to send final to %d: %s", user.telegram_id, e)
+
+
+def build_scheduler(bot: Bot, storage: MemoryStorage) -> AsyncIOScheduler:
+    tz = settings.timezone
+    scheduler = AsyncIOScheduler()
+
+    scheduler.add_job(
+        _send_daily_checkins,
+        trigger=CronTrigger(hour=settings.checkin_hour, minute=0, timezone=tz),
+        args=[bot, storage],
+        id="daily_checkin",
+    )
+    scheduler.add_job(
+        _send_reminders,
+        trigger=CronTrigger(hour=settings.reminder_hour, minute=0, timezone=tz),
+        args=[bot],
+        id="daily_reminder",
+    )
+    scheduler.add_job(
+        _mark_missed,
+        trigger=CronTrigger(hour=23, minute=59, timezone=tz),
+        id="end_of_day_mark",
+    )
+    scheduler.add_job(
+        _send_weekly_summary,
+        trigger=CronTrigger(day_of_week=settings.weekly_summary_dow, hour=settings.weekly_summary_hour, minute=0, timezone=tz),
+        args=[bot],
+        id="weekly_summary",
+    )
+
+    final_datetime = datetime.combine(settings.final_date, __import__("datetime").time(9, 0))
+    if final_datetime > datetime.now():
+        scheduler.add_job(
+            _trigger_final,
+            trigger=DateTrigger(run_date=final_datetime, timezone=tz),
+            args=[bot, storage],
+            id="final_trigger",
+        )
+    else:
+        logger.warning("Final date %s is in the past, scheduling immediate final check on startup", settings.final_date)
+
+    return scheduler
+
+
+async def run_missed_final_if_needed(bot: Bot, storage: MemoryStorage) -> None:
+    if date.today() >= settings.final_date:
+        logger.info("Final date reached, checking for unsent finals...")
+        await _trigger_final(bot, storage)
