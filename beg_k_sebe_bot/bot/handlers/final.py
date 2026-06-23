@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.database.models import User
 from beg_k_sebe_bot.bot.texts import messages as msg
+from beg_k_sebe_bot.bot.utils.validators import parse_wheel_value
 
 router = Router()
 
@@ -29,7 +30,7 @@ async def send_final(user_id: int, bot: Bot, state: FSMContext, session: AsyncSe
 
 @router.message(FinalStates.waiting_wheel_b_money)
 async def handle_wheel_b_money(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = _parse_wheel_value(message.text)
+    value = parse_wheel_value(message.text)
     if value is None:
         await message.answer(msg.WHEEL_INVALID)
         return
@@ -42,7 +43,7 @@ async def handle_wheel_b_money(message: Message, state: FSMContext, session: Asy
 
 @router.message(FinalStates.waiting_wheel_b_relationships)
 async def handle_wheel_b_relationships(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = _parse_wheel_value(message.text)
+    value = parse_wheel_value(message.text)
     if value is None:
         await message.answer(msg.WHEEL_INVALID)
         return
@@ -55,7 +56,7 @@ async def handle_wheel_b_relationships(message: Message, state: FSMContext, sess
 
 @router.message(FinalStates.waiting_wheel_b_health)
 async def handle_wheel_b_health(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = _parse_wheel_value(message.text)
+    value = parse_wheel_value(message.text)
     if value is None:
         await message.answer(msg.WHEEL_INVALID)
         return
@@ -69,11 +70,3 @@ async def handle_wheel_b_health(message: Message, state: FSMContext, session: As
     from beg_k_sebe_bot.bot.services.final_summary import build_final_summary
     summary = await build_final_summary(user, session)
     await message.answer(summary)
-
-
-def _parse_wheel_value(text: str) -> int | None:
-    try:
-        v = int(text.strip())
-        return v if 1 <= v <= 10 else None
-    except ValueError:
-        return None

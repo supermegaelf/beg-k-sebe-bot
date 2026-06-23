@@ -1,24 +1,33 @@
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
+
 from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal
 from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
+from beg_k_sebe_bot.bot.handlers.daily_checkin import send_checkin
+from beg_k_sebe_bot.bot.handlers.final import send_final
+from beg_k_sebe_bot.bot.services.weekly_summary import send_weekly_summary
+from beg_k_sebe_bot.bot.texts import messages as msg
 
 logger = logging.getLogger(__name__)
 
 
 async def _send_daily_checkins(bot: Bot, storage: MemoryStorage) -> None:
     today = date.today()
-    if today < settings.start_date or today > settings.final_date:
+    if today < settings.start_date or today >= settings.final_date:
         return
+
+    is_day_30 = today == settings.start_date + timedelta(days=29)
 
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -27,26 +36,19 @@ async def _send_daily_checkins(bot: Bot, storage: MemoryStorage) -> None:
         users = result.scalars().all()
 
         for user in users:
-            if user.joined_at and user.joined_at.date() > today:
-                continue
-
-            from aiogram.fsm.context import FSMContext
-            from aiogram.fsm.storage.base import StorageKey
             key = StorageKey(bot_id=bot.id, chat_id=user.telegram_id, user_id=user.telegram_id)
             state = FSMContext(storage=storage, key=key)
             current = await state.get_state()
             if current is not None:
                 continue
 
-            from beg_k_sebe_bot.bot.handlers.daily_checkin import send_checkin
             try:
-                await send_checkin(user.telegram_id, bot, session)
+                await send_checkin(user.telegram_id, bot, session, state)
             except Exception as e:
                 logger.error("Failed to send checkin to %d: %s", user.telegram_id, e)
 
-            if today == settings.start_date + __import__("datetime").timedelta(days=29):
+            if is_day_30:
                 try:
-                    from beg_k_sebe_bot.bot.texts import messages as msg
                     await bot.send_message(user.telegram_id, msg.DAY_30_WARNING)
                 except Exception as e:
                     logger.error("Failed to send day30 warning to %d: %s", user.telegram_id, e)
@@ -65,12 +67,11 @@ async def _send_reminders(bot: Bot) -> None:
         checkins = result.scalars().all()
         for checkin in checkins:
             try:
-                from beg_k_sebe_bot.bot.texts import messages as msg
                 await bot.send_message(checkin.user_id, msg.REMINDER)
                 checkin.reminder_sent = True
-                await session.commit()
             except Exception as e:
                 logger.error("Failed to send reminder to %d: %s", checkin.user_id, e)
+        await session.commit()
 
 
 async def _mark_missed() -> None:
@@ -89,7 +90,6 @@ async def _mark_missed() -> None:
 
 async def _send_weekly_summary(bot: Bot) -> None:
     async with AsyncSessionLocal() as session:
-        from beg_k_sebe_bot.bot.services.weekly_summary import send_weekly_summary
         await send_weekly_summary(bot, session)
 
 
@@ -103,11 +103,8 @@ async def _trigger_final(bot: Bot, storage: MemoryStorage) -> None:
         )
         users = result.scalars().all()
         for user in users:
-            from aiogram.fsm.context import FSMContext
-            from aiogram.fsm.storage.base import StorageKey
             key = StorageKey(bot_id=bot.id, chat_id=user.telegram_id, user_id=user.telegram_id)
             state = FSMContext(storage=storage, key=key)
-            from beg_k_sebe_bot.bot.handlers.final import send_final
             try:
                 await send_final(user.telegram_id, bot, state, session)
             except Exception as e:
@@ -142,11 +139,12 @@ def build_scheduler(bot: Bot, storage: MemoryStorage) -> AsyncIOScheduler:
         id="weekly_summary",
     )
 
-    final_datetime = datetime.combine(settings.final_date, __import__("datetime").time(9, 0))
-    if final_datetime > datetime.now():
+    tz_obj = ZoneInfo(settings.timezone)
+    final_dt = datetime.combine(settings.final_date, time(9, 0), tzinfo=tz_obj)
+    if final_dt > datetime.now(tz=tz_obj):
         scheduler.add_job(
             _trigger_final,
-            trigger=DateTrigger(run_date=final_datetime, timezone=tz),
+            trigger=DateTrigger(run_date=final_dt),
             args=[bot, storage],
             id="final_trigger",
         )

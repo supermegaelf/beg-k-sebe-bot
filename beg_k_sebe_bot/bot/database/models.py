@@ -14,8 +14,8 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(64))
     goal: Mapped[str | None] = mapped_column(Text)
     movement_format: Mapped[str | None] = mapped_column(String(20))
-    joined_at: Mapped[datetime | None] = mapped_column(DateTime)
-    onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     wheel_a_money: Mapped[int | None] = mapped_column(SmallInteger)
     wheel_a_relationships: Mapped[int | None] = mapped_column(SmallInteger)
@@ -39,7 +39,7 @@ class MovementFormatChange(Base):
     old_format: Mapped[str] = mapped_column(String(20))
     new_format: Mapped[str] = mapped_column(String(20))
     changed_on_day: Mapped[int] = mapped_column(Integer)
-    changed_at: Mapped[datetime] = mapped_column(DateTime)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
     user: Mapped["User"] = relationship(back_populates="format_changes")
 
@@ -56,7 +56,7 @@ class DailyCheckin(Base):
     energy_level: Mapped[int | None] = mapped_column(SmallInteger)
     shift_text: Mapped[str | None] = mapped_column(Text)
     reminder_sent: Mapped[bool] = mapped_column(Boolean, default=False)
-    answered_at: Mapped[datetime | None] = mapped_column(DateTime)
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     status: Mapped[str] = mapped_column(String(10), default="pending")
 
     __table_args__ = (UniqueConstraint("user_id", "day_number"),)
