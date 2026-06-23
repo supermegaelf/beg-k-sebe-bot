@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     def final_date(self) -> date:
         return self.start_date + timedelta(days=self.final_program_day - 1)
 
-    model_config = {"env_file": ".env"}
+    model_config = {"env_file": ".env", "env_ignore_empty": True}
 
 
 settings = Settings()
