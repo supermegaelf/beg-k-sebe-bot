@@ -1,0 +1,73 @@
+import logging
+import random
+from datetime import date, timedelta
+from aiogram import Bot
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from beg_k_sebe_bot.bot.config import settings
+from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
+from beg_k_sebe_bot.bot.services.movement_calc import total_movement
+from beg_k_sebe_bot.bot.texts import messages as msg
+
+logger = logging.getLogger(__name__)
+
+
+async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
+    if settings.group_chat_id == 0:
+        logger.warning("GROUP_CHAT_ID not set, skipping weekly summary")
+        return
+
+    week_start = date.today() - timedelta(days=6)
+    effective_start = max(week_start, settings.start_date)
+
+    users_result = await session.execute(
+        select(User).where(User.onboarding_completed_at.is_not(None))
+    )
+    users = users_result.scalars().all()
+    if not users:
+        return
+
+    checkins_result = await session.execute(
+        select(DailyCheckin).where(
+            DailyCheckin.date >= effective_start,
+            DailyCheckin.date <= date.today(),
+            DailyCheckin.status == "answered",
+        )
+    )
+    answered_checkins = checkins_result.scalars().all()
+
+    total_min_walk = 0.0
+    total_min_run = 0.0
+    total_km_run = 0.0
+
+    for user in users:
+        user_checkins = [c for c in answered_checkins if c.user_id == user.telegram_id]
+        if not user_checkins:
+            continue
+        totals = total_movement(user_checkins, user.format_changes, user.movement_format or "walk_22min")
+        total_min_walk += totals["min_walk"]
+        total_min_run += totals["min_run"]
+        total_km_run += totals["km_run"]
+
+    expected_total = sum(
+        min((date.today() - max(week_start, u.joined_at.date() if u.joined_at else week_start)).days + 1, 7)
+        for u in users
+    )
+    completion_pct = round(len(answered_checkins) / expected_total * 100) if expected_total > 0 else 0
+
+    movement_lines = ""
+    if total_min_walk > 0:
+        movement_lines += f"🚶 Ходьба: {int(total_min_walk)} мин\n"
+    if total_min_run > 0:
+        movement_lines += f"🏃 Бег: {int(total_min_run)} мин\n"
+    if total_km_run > 0:
+        movement_lines += f"🏃 Бег: {total_km_run:.1f} км\n"
+
+    text = msg.WEEKLY_SUMMARY.format(
+        movement_lines=movement_lines or "Данных о движении пока нет.\n",
+        completion_pct=completion_pct,
+        motivation=random.choice(msg.WEEKLY_MOTIVATION_PHRASES),
+    )
+
+    await bot.send_message(settings.group_chat_id, text)
