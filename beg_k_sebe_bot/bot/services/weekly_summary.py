@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
-    if settings.group_chat_id == 0:
+    if settings.group_chat_id is None:
         logger.warning("GROUP_CHAT_ID not set, skipping weekly summary")
         return
 

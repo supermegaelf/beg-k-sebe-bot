@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     bot_token: str
     database_url: str
-    group_chat_id: int = 0
+    group_chat_id: int | None = None
     postgres_user: str = ""
     postgres_password: str = ""
     postgres_db: str = ""
