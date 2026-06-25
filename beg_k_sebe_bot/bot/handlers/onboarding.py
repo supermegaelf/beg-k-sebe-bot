@@ -36,7 +36,8 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession) 
 
     existing = await session.get(User, message.from_user.id)
     if existing and existing.onboarding_completed_at:
-        await message.answer(msg.ALREADY_REGISTERED)
+        await state.clear()
+        await message.answer(msg.RESTART)
         return
 
     if today > settings.registration_deadline and not existing:
