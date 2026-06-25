@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import StateFilter
 from aiogram.fsm.state import default_state
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import Message
+from aiogram.types import BotCommand, Message
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal, create_tables
@@ -49,6 +49,11 @@ async def main() -> None:
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 
     await run_missed_final_if_needed(bot, storage)
+
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Перезапустить"),
+        BotCommand(command="change_format", description="Сменить формат движения"),
+    ])
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
