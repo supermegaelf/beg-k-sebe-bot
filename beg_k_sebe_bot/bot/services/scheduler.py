@@ -54,26 +54,6 @@ async def _send_daily_checkins(bot: Bot, storage: MemoryStorage) -> None:
                     logger.error("Failed to send day30 warning to %d: %s", user.telegram_id, e)
 
 
-async def _send_reminders(bot: Bot) -> None:
-    today = date.today()
-    async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(DailyCheckin).where(
-                DailyCheckin.date == today,
-                DailyCheckin.status == "pending",
-                DailyCheckin.reminder_sent == False,  # noqa: E712
-            )
-        )
-        checkins = result.scalars().all()
-        for checkin in checkins:
-            try:
-                await bot.send_message(checkin.user_id, msg.REMINDER)
-                checkin.reminder_sent = True
-            except Exception as e:
-                logger.error("Failed to send reminder to %d: %s", checkin.user_id, e)
-        await session.commit()
-
-
 async def _mark_missed() -> None:
     today = date.today()
     async with AsyncSessionLocal() as session:
@@ -120,12 +100,6 @@ def build_scheduler(bot: Bot, storage: MemoryStorage) -> AsyncIOScheduler:
         trigger=CronTrigger(hour=settings.checkin_hour, minute=0, timezone=tz),
         args=[bot, storage],
         id="daily_checkin",
-    )
-    scheduler.add_job(
-        _send_reminders,
-        trigger=CronTrigger(hour=settings.reminder_hour, minute=0, timezone=tz),
-        args=[bot],
-        id="daily_reminder",
     )
     scheduler.add_job(
         _mark_missed,
