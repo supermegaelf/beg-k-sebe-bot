@@ -1,6 +1,6 @@
 import logging
 import random
-from datetime import date, timedelta
+from datetime import timedelta
 from aiogram import Bot
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,6 +9,7 @@ from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.models import DailyCheckin, MovementFormatChange, User
 from beg_k_sebe_bot.bot.services.movement_calc import total_movement
 from beg_k_sebe_bot.bot.texts import messages as msg
+from beg_k_sebe_bot.bot.utils.program import today_msk
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
         logger.warning("GROUP_CHAT_ID not set, skipping weekly summary")
         return
 
-    week_start = date.today() - timedelta(days=6)
+    week_start = today_msk() - timedelta(days=6)
     effective_start = max(week_start, settings.start_date)
 
     users_result = await session.execute(
@@ -33,7 +34,7 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
     checkins_result = await session.execute(
         select(DailyCheckin).where(
             DailyCheckin.date >= effective_start,
-            DailyCheckin.date <= date.today(),
+            DailyCheckin.date <= today_msk(),
             DailyCheckin.status == "answered",
             DailyCheckin.user_id.in_(user_ids),
         )
@@ -60,7 +61,7 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
         total_km_run += totals["km_run"]
 
     expected_total = sum(
-        min((date.today() - max(week_start, u.joined_at.date() if u.joined_at else week_start)).days + 1, 7)
+        min((today_msk() - max(effective_start, u.joined_at.date() if u.joined_at else effective_start)).days + 1, 7)
         for u in users
     )
     completion_pct = round(len(answered_checkins) / expected_total * 100) if expected_total > 0 else 0

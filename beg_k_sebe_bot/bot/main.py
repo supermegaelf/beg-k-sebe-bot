@@ -6,7 +6,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import StateFilter
 from aiogram.fsm.state import default_state
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand, Message
 
 from beg_k_sebe_bot.bot.config import settings
@@ -33,7 +33,7 @@ async def main() -> None:
         token=settings.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
-    storage = MemoryStorage()
+    storage = RedisStorage.from_url("redis://redis:6379/0")
     dp = Dispatcher(storage=storage)
 
     dp.update.middleware(DbSessionMiddleware(AsyncSessionLocal))
