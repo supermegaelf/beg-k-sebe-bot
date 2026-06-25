@@ -1,11 +1,11 @@
 import logging
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.base import BaseStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -15,6 +15,7 @@ from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal
 from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
 from beg_k_sebe_bot.bot.handlers.daily_checkin import send_checkin
+from beg_k_sebe_bot.bot.utils.program import today_msk
 from beg_k_sebe_bot.bot.handlers.final import send_final
 from beg_k_sebe_bot.bot.services.weekly_summary import send_weekly_summary
 from beg_k_sebe_bot.bot.texts import messages as msg
@@ -22,8 +23,8 @@ from beg_k_sebe_bot.bot.texts import messages as msg
 logger = logging.getLogger(__name__)
 
 
-async def _send_daily_checkins(bot: Bot, storage: MemoryStorage) -> None:
-    today = date.today()
+async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
+    today = today_msk()
     if today < settings.start_date or today >= settings.final_date:
         return
 
@@ -55,7 +56,7 @@ async def _send_daily_checkins(bot: Bot, storage: MemoryStorage) -> None:
 
 
 async def _mark_missed() -> None:
-    today = date.today()
+    today = today_msk()
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(DailyCheckin).where(
@@ -73,7 +74,7 @@ async def _send_weekly_summary(bot: Bot) -> None:
         await send_weekly_summary(bot, session)
 
 
-async def _trigger_final(bot: Bot, storage: MemoryStorage) -> None:
+async def _trigger_final(bot: Bot, storage: BaseStorage) -> None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             select(User).where(
@@ -91,7 +92,7 @@ async def _trigger_final(bot: Bot, storage: MemoryStorage) -> None:
                 logger.error("Failed to send final to %d: %s", user.telegram_id, e)
 
 
-def build_scheduler(bot: Bot, storage: MemoryStorage) -> AsyncIOScheduler:
+def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
     tz = settings.timezone
     scheduler = AsyncIOScheduler()
 
@@ -128,7 +129,7 @@ def build_scheduler(bot: Bot, storage: MemoryStorage) -> AsyncIOScheduler:
     return scheduler
 
 
-async def run_missed_final_if_needed(bot: Bot, storage: MemoryStorage) -> None:
-    if date.today() >= settings.final_date:
+async def run_missed_final_if_needed(bot: Bot, storage: BaseStorage) -> None:
+    if today_msk() >= settings.final_date:
         logger.info("Final date reached, checking for unsent finals...")
         await _trigger_final(bot, storage)

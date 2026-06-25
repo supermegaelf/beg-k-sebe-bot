@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from aiogram import Router, Bot, F
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.database.models import DailyCheckin
 from beg_k_sebe_bot.bot.texts import messages as msg
-from beg_k_sebe_bot.bot.utils.program import current_program_day
+from beg_k_sebe_bot.bot.utils.program import current_program_day, today_msk
 
 router = Router()
 
@@ -34,7 +34,7 @@ async def send_checkin(user_id: int, bot: Bot, session: AsyncSession, state: FSM
     checkin = DailyCheckin(
         user_id=user_id,
         day_number=day,
-        date=date.today(),
+        date=today_msk(),
         status="pending",
     )
     session.add(checkin)
@@ -44,25 +44,20 @@ async def send_checkin(user_id: int, bot: Bot, session: AsyncSession, state: FSM
     await state.set_state(CheckinStates.waiting_movement)
 
 
-async def _get_today_checkin(user_id: int, session: AsyncSession) -> DailyCheckin | None:
-    day = current_program_day()
+async def _get_pending_checkin(user_id: int, session: AsyncSession) -> DailyCheckin | None:
     result = await session.execute(
         select(DailyCheckin).where(
             DailyCheckin.user_id == user_id,
-            DailyCheckin.day_number == day,
-        )
+            DailyCheckin.status == "pending",
+        ).order_by(DailyCheckin.day_number.desc()).limit(1)
     )
     return result.scalar_one_or_none()
 
 
 @router.callback_query(CheckinStates.waiting_movement, F.data.startswith("ci:"))
 async def handle_movement(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
-    checkin = await _get_today_checkin(callback.from_user.id, session)
+    checkin = await _get_pending_checkin(callback.from_user.id, session)
     if checkin is None:
-        await callback.answer()
-        return
-    if checkin.status == "answered":
-        await callback.message.answer(msg.CHECKIN_ALREADY_DONE)
         await callback.answer()
         return
 
@@ -77,12 +72,8 @@ async def handle_movement(callback: CallbackQuery, state: FSMContext, session: A
 
 @router.callback_query(CheckinStates.waiting_practice, F.data.startswith("ci:"))
 async def handle_practice(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
-    checkin = await _get_today_checkin(callback.from_user.id, session)
+    checkin = await _get_pending_checkin(callback.from_user.id, session)
     if checkin is None:
-        await callback.answer()
-        return
-    if checkin.status == "answered":
-        await callback.message.answer(msg.CHECKIN_ALREADY_DONE)
         await callback.answer()
         return
 
@@ -105,11 +96,8 @@ async def handle_energy(message: Message, state: FSMContext, session: AsyncSessi
         await message.answer(msg.WHEEL_INVALID)
         return
 
-    checkin = await _get_today_checkin(message.from_user.id, session)
+    checkin = await _get_pending_checkin(message.from_user.id, session)
     if checkin is None:
-        return
-    if checkin.status == "answered":
-        await message.answer(msg.CHECKIN_ALREADY_DONE)
         return
 
     checkin.energy_level = value
@@ -121,11 +109,8 @@ async def handle_energy(message: Message, state: FSMContext, session: AsyncSessi
 
 @router.message(CheckinStates.waiting_shift)
 async def handle_shift(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    checkin = await _get_today_checkin(message.from_user.id, session)
+    checkin = await _get_pending_checkin(message.from_user.id, session)
     if checkin is None:
-        return
-    if checkin.status == "answered":
-        await message.answer(msg.CHECKIN_ALREADY_DONE)
         return
 
     checkin.shift_text = message.text

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.models import MovementFormatChange, User
-from beg_k_sebe_bot.bot.utils.program import current_program_day
+from beg_k_sebe_bot.bot.utils.program import current_program_day, today_msk
 
 router = Router()
 
@@ -30,7 +30,7 @@ async def cmd_change_format(message: Message, session: AsyncSession) -> None:
     if not user or not user.onboarding_completed_at:
         return
 
-    today = date.today()
+    today = today_msk()
     if today < settings.start_date or today > settings.final_date:
         return
 
