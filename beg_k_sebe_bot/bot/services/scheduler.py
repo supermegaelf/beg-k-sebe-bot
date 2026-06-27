@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -47,6 +48,8 @@ async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
                 await send_checkin(user.telegram_id, bot, session, state)
             except Exception as e:
                 logger.error("Failed to send checkin to %d: %s", user.telegram_id, e)
+
+            await asyncio.sleep(0.05)
 
             if is_day_30:
                 try:
