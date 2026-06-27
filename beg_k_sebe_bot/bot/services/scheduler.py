@@ -40,15 +40,19 @@ async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
         )
         users = result.scalars().all()
 
+        sent = skipped = 0
         for user in users:
             key = StorageKey(bot_id=bot.id, chat_id=user.telegram_id, user_id=user.telegram_id)
             state = FSMContext(storage=storage, key=key)
             current = await state.get_state()
             if current is not None:
+                logger.warning("Skipping checkin for %d (@%s): FSM state=%s", user.telegram_id, user.username, current)
+                skipped += 1
                 continue
 
             try:
                 await send_checkin(user.telegram_id, bot, session, state)
+                sent += 1
             except Exception as e:
                 logger.error("Failed to send checkin to %d: %s", user.telegram_id, e)
 
@@ -60,6 +64,8 @@ async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
 
             await asyncio.sleep(_MSG_INTERVAL)
 
+        logger.info("Daily checkin done: sent=%d skipped=%d total=%d", sent, skipped, len(users))
+
 
 async def _mark_missed(bot: Bot, storage: BaseStorage) -> None:
     today = today_msk()
@@ -70,11 +76,19 @@ async def _mark_missed(bot: Bot, storage: BaseStorage) -> None:
                 DailyCheckin.status == "pending",
             )
         )
-        for checkin in result.scalars().all():
+        checkins = result.scalars().all()
+
+        for checkin in checkins:
             checkin.status = "missed"
-            key = StorageKey(bot_id=bot.id, chat_id=checkin.user_id, user_id=checkin.user_id)
-            await FSMContext(storage=storage, key=key).clear()
         await session.commit()
+        logger.info("Marked %d checkins as missed for %s", len(checkins), today)
+
+        for checkin in checkins:
+            key = StorageKey(bot_id=bot.id, chat_id=checkin.user_id, user_id=checkin.user_id)
+            try:
+                await FSMContext(storage=storage, key=key).clear()
+            except Exception as e:
+                logger.error("Failed to clear FSM state for %d: %s", checkin.user_id, e)
 
 
 async def _send_weekly_summary(bot: Bot) -> None:

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime, timezone
 from aiogram import Router, Bot, F
 from aiogram.exceptions import TelegramRetryAfter
@@ -12,6 +13,7 @@ from beg_k_sebe_bot.bot.database.models import DailyCheckin
 from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.program import current_program_day, today_msk
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 
@@ -44,6 +46,7 @@ async def send_checkin(user_id: int, bot: Bot, session: AsyncSession, state: FSM
     try:
         await bot.send_message(user_id, msg.CHECKIN_Q1, reply_markup=_yes_partial_no_keyboard())
     except TelegramRetryAfter as e:
+        logger.warning("Rate limited sending checkin to %d, retrying after %ds", user_id, e.retry_after)
         await asyncio.sleep(e.retry_after)
         await bot.send_message(user_id, msg.CHECKIN_Q1, reply_markup=_yes_partial_no_keyboard())
 
