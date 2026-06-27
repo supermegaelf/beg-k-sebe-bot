@@ -23,6 +23,9 @@ from beg_k_sebe_bot.bot.texts import messages as msg
 
 logger = logging.getLogger(__name__)
 
+# Telegram allows ~30 outgoing messages/sec per bot; 20/sec gives comfortable headroom.
+_MSG_INTERVAL = 1 / 20
+
 
 async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
     today = today_msk()
@@ -49,13 +52,13 @@ async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
             except Exception as e:
                 logger.error("Failed to send checkin to %d: %s", user.telegram_id, e)
 
-            await asyncio.sleep(0.05)
-
             if is_day_30:
                 try:
                     await bot.send_message(user.telegram_id, msg.DAY_30_WARNING)
                 except Exception as e:
                     logger.error("Failed to send day30 warning to %d: %s", user.telegram_id, e)
+
+            await asyncio.sleep(_MSG_INTERVAL)
 
 
 async def _mark_missed() -> None:

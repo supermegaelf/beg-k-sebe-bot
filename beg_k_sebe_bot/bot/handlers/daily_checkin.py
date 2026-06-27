@@ -1,5 +1,7 @@
+import asyncio
 from datetime import datetime, timezone
 from aiogram import Router, Bot, F
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -38,9 +40,14 @@ async def send_checkin(user_id: int, bot: Bot, session: AsyncSession, state: FSM
         status="pending",
     )
     session.add(checkin)
-    await session.commit()
 
-    await bot.send_message(user_id, msg.CHECKIN_Q1, reply_markup=_yes_partial_no_keyboard())
+    try:
+        await bot.send_message(user_id, msg.CHECKIN_Q1, reply_markup=_yes_partial_no_keyboard())
+    except TelegramRetryAfter as e:
+        await asyncio.sleep(e.retry_after)
+        await bot.send_message(user_id, msg.CHECKIN_Q1, reply_markup=_yes_partial_no_keyboard())
+
+    await session.commit()
     await state.set_state(CheckinStates.waiting_movement)
 
 
