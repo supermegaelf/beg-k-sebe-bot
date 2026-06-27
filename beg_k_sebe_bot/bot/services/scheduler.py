@@ -61,7 +61,7 @@ async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
             await asyncio.sleep(_MSG_INTERVAL)
 
 
-async def _mark_missed() -> None:
+async def _mark_missed(bot: Bot, storage: BaseStorage) -> None:
     today = today_msk()
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -72,6 +72,8 @@ async def _mark_missed() -> None:
         )
         for checkin in result.scalars().all():
             checkin.status = "missed"
+            key = StorageKey(bot_id=bot.id, chat_id=checkin.user_id, user_id=checkin.user_id)
+            await FSMContext(storage=storage, key=key).clear()
         await session.commit()
 
 
@@ -111,6 +113,7 @@ def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
     scheduler.add_job(
         _mark_missed,
         trigger=CronTrigger(hour=23, minute=59, timezone=tz),
+        args=[bot, storage],
         id="end_of_day_mark",
     )
     scheduler.add_job(
