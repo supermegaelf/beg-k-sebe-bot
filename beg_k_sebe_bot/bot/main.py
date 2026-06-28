@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import StateFilter
 from aiogram.fsm.state import default_state
 from aiogram.fsm.storage.redis import RedisStorage
-from aiogram.types import BotCommand, Message
+from aiogram.types import BotCommand, CallbackQuery, Message
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal, create_tables
@@ -24,6 +24,11 @@ _ignore_router = Router()
 @_ignore_router.message(StateFilter(default_state))
 async def ignore_unhandled(_: Message) -> None:
     pass
+
+
+@_ignore_router.callback_query()
+async def ignore_callback(callback: CallbackQuery) -> None:
+    await callback.answer()
 
 
 async def main() -> None:

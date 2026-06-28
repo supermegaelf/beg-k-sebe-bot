@@ -1,15 +1,19 @@
-from datetime import datetime, timezone
+import asyncio
+import logging
+from datetime import date, datetime, timezone
 from aiogram import Router, Bot, F
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.models import DailyCheckin
 from beg_k_sebe_bot.bot.texts import messages as msg
-from beg_k_sebe_bot.bot.utils.program import current_program_day, today_msk
 
+logger = logging.getLogger(__name__)
 router = Router()
 
 
@@ -28,19 +32,28 @@ def _yes_partial_no_keyboard() -> InlineKeyboardMarkup:
     ]])
 
 
-async def send_checkin(user_id: int, bot: Bot, session: AsyncSession, state: FSMContext) -> None:
-    day = current_program_day()
+async def send_checkin(user_id: int, bot: Bot, session: AsyncSession, state: FSMContext, today: date) -> None:
+    day = (today - settings.start_date).days + 1
 
     checkin = DailyCheckin(
         user_id=user_id,
         day_number=day,
-        date=today_msk(),
+        date=today,
         status="pending",
     )
     session.add(checkin)
-    await session.commit()
 
-    await bot.send_message(user_id, msg.CHECKIN_Q1, reply_markup=_yes_partial_no_keyboard())
+    for attempt in range(3):
+        try:
+            await bot.send_message(user_id, msg.CHECKIN_Q1, reply_markup=_yes_partial_no_keyboard())
+            break
+        except TelegramRetryAfter as e:
+            if attempt == 2:
+                raise
+            logger.warning("Rate limited sending checkin to %d, retrying after %ds", user_id, e.retry_after)
+            await asyncio.sleep(e.retry_after)
+
+    await session.commit()
     await state.set_state(CheckinStates.waiting_movement)
 
 
