@@ -85,7 +85,7 @@ async def _mark_missed(bot: Bot, storage: BaseStorage) -> None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
             update(DailyCheckin)
-            .where(DailyCheckin.date == today, DailyCheckin.status == "pending")
+            .where(DailyCheckin.date <= today, DailyCheckin.status == "pending")
             .values(status="missed")
             .returning(DailyCheckin.user_id)
         )
@@ -140,6 +140,7 @@ def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
         trigger=CronTrigger(hour=23, minute=59, timezone=tz),
         args=[bot, storage],
         id="end_of_day_mark",
+        misfire_grace_time=3600,
     )
     scheduler.add_job(
         _send_weekly_summary,
