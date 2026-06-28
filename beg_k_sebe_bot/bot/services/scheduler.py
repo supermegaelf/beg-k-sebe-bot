@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
@@ -10,7 +10,7 @@ from aiogram.fsm.storage.base import BaseStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal
@@ -40,55 +40,65 @@ async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
         )
         users = result.scalars().all()
 
-        sent = skipped = 0
-        for user in users:
-            key = StorageKey(bot_id=bot.id, chat_id=user.telegram_id, user_id=user.telegram_id)
-            state = FSMContext(storage=storage, key=key)
-            current = await state.get_state()
-            if current is not None:
-                logger.warning("Skipping checkin for %d (@%s): FSM state=%s", user.telegram_id, user.username, current)
+    sent = skipped = errors = 0
+    for user in users:
+        key = StorageKey(bot_id=bot.id, chat_id=user.telegram_id, user_id=user.telegram_id)
+        state = FSMContext(storage=storage, key=key)
+        current = await state.get_state()
+        if current is not None:
+            logger.warning("Skipping checkin for %d (@%s): FSM state=%s", user.telegram_id, user.username, current)
+            skipped += 1
+            continue
+
+        async with AsyncSessionLocal() as session:
+            existing = await session.execute(
+                select(DailyCheckin).where(
+                    DailyCheckin.user_id == user.telegram_id,
+                    DailyCheckin.date == today,
+                )
+            )
+            if existing.scalar_one_or_none() is not None:
+                logger.info("Checkin already exists for %d on %s, skipping", user.telegram_id, today)
                 skipped += 1
                 continue
 
             try:
-                await send_checkin(user.telegram_id, bot, session, state)
+                await send_checkin(user.telegram_id, bot, session, state, today)
                 sent += 1
             except Exception as e:
                 logger.error("Failed to send checkin to %d: %s", user.telegram_id, e)
+                errors += 1
 
-            if is_day_30:
-                try:
-                    await bot.send_message(user.telegram_id, msg.DAY_30_WARNING)
-                except Exception as e:
-                    logger.error("Failed to send day30 warning to %d: %s", user.telegram_id, e)
+        if is_day_30:
+            try:
+                await bot.send_message(user.telegram_id, msg.DAY_30_WARNING)
+            except Exception as e:
+                logger.error("Failed to send day30 warning to %d: %s", user.telegram_id, e)
 
-            await asyncio.sleep(_MSG_INTERVAL)
+        await asyncio.sleep(_MSG_INTERVAL)
 
-        logger.info("Daily checkin done: sent=%d skipped=%d total=%d", sent, skipped, len(users))
+    logger.info("Daily checkin done: sent=%d skipped=%d errors=%d total=%d", sent, skipped, errors, len(users))
 
 
 async def _mark_missed(bot: Bot, storage: BaseStorage) -> None:
     today = today_msk()
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(DailyCheckin).where(
-                DailyCheckin.date == today,
-                DailyCheckin.status == "pending",
-            )
+            update(DailyCheckin)
+            .where(DailyCheckin.date == today, DailyCheckin.status == "pending")
+            .values(status="missed")
+            .returning(DailyCheckin.user_id)
         )
-        checkins = result.scalars().all()
-
-        for checkin in checkins:
-            checkin.status = "missed"
+        missed_user_ids = [row[0] for row in result]
         await session.commit()
-        logger.info("Marked %d checkins as missed for %s", len(checkins), today)
+        logger.info("Marked %d checkins as missed for %s", len(missed_user_ids), today)
 
-        for checkin in checkins:
-            key = StorageKey(bot_id=bot.id, chat_id=checkin.user_id, user_id=checkin.user_id)
-            try:
-                await FSMContext(storage=storage, key=key).clear()
-            except Exception as e:
-                logger.error("Failed to clear FSM state for %d: %s", checkin.user_id, e)
+    for user_id in missed_user_ids:
+        key = StorageKey(bot_id=bot.id, chat_id=user_id, user_id=user_id)
+        try:
+            await FSMContext(storage=storage, key=key).clear()
+        except Exception as e:
+            logger.error("Failed to clear FSM state for %d: %s", user_id, e)
 
 
 async def _send_weekly_summary(bot: Bot) -> None:
@@ -123,6 +133,7 @@ def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
         trigger=CronTrigger(hour=settings.checkin_hour, minute=0, timezone=tz),
         args=[bot, storage],
         id="daily_checkin",
+        misfire_grace_time=3600,
     )
     scheduler.add_job(
         _mark_missed,
