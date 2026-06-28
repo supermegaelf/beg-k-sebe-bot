@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     postgres_db: str = ""
 
     start_date: date = date(2026, 6, 25)
-    registration_deadline: date = date(2026, 6, 28)
+    registration_deadline: date = date(2026, 6, 29)
     checkin_hour: int = 22
     weekly_summary_dow: str = "sun"
     weekly_summary_hour: int = 23
