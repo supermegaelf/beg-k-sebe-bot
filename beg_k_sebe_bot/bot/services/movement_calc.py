@@ -8,6 +8,8 @@ FORMAT_VALUES: dict[str, dict] = {
 
 MULTIPLIERS = {"yes": 1.0, "partial": 0.5, "no": 0.0}
 
+KM_INPUT_FORMATS = {"run_5km"}
+
 
 def format_for_day(
     day_number: int,
@@ -28,6 +30,9 @@ def total_movement(
 ) -> dict[str, float]:
     result = {"min_walk": 0.0, "min_run": 0.0, "km_run": 0.0}
     for checkin in checkins:
+        if checkin.run_km is not None:
+            result["km_run"] += checkin.run_km
+            continue
         if checkin.movement_done not in MULTIPLIERS:
             continue
         fmt = format_for_day(checkin.day_number, format_changes, initial_format)

@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     start_date: date = date(2026, 6, 25)
     registration_deadline: date = date(2026, 6, 29)
-    checkin_hour: int = 22
+    checkin_hour: int = 20
     weekly_summary_dow: str = "sun"
     weekly_summary_hour: int = 23
     final_program_day: int = 31

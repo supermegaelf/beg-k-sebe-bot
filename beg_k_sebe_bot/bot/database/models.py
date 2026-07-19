@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Integer, SmallInteger, String, Text, UniqueConstraint, ForeignKey
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, Integer, SmallInteger, String, Text, UniqueConstraint, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -52,6 +52,7 @@ class DailyCheckin(Base):
     day_number: Mapped[int] = mapped_column(Integer)
     date: Mapped[date] = mapped_column(Date)
     movement_done: Mapped[str | None] = mapped_column(String(10))
+    run_km: Mapped[float | None] = mapped_column(Float)
     practice_done: Mapped[str | None] = mapped_column(String(10))
     energy_level: Mapped[int | None] = mapped_column(SmallInteger)
     shift_text: Mapped[str | None] = mapped_column(Text)
