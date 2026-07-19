@@ -13,7 +13,12 @@ from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal, create_tables
 from beg_k_sebe_bot.bot.handlers import onboarding, daily_checkin, change_format, final
 from beg_k_sebe_bot.bot.middleware import DbSessionMiddleware
-from beg_k_sebe_bot.bot.services.scheduler import build_scheduler, run_missed_final_if_needed
+from beg_k_sebe_bot.bot.services.scheduler import (
+    build_scheduler,
+    run_missed_checkin_if_needed,
+    run_missed_final_if_needed,
+    run_missed_summary_if_needed,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -53,6 +58,8 @@ async def main() -> None:
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 
+    await run_missed_checkin_if_needed(bot, storage)
+    await run_missed_summary_if_needed(bot)
     await run_missed_final_if_needed(bot, storage)
 
     await bot.set_my_commands([

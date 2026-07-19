@@ -168,3 +168,28 @@ async def run_missed_final_if_needed(bot: Bot, storage: BaseStorage) -> None:
     if today_msk() >= settings.final_date:
         logger.info("Final date reached, checking for unsent finals...")
         await _trigger_final(bot, storage)
+
+
+async def run_missed_checkin_if_needed(bot: Bot, storage: BaseStorage) -> None:
+    now = datetime.now(ZoneInfo(settings.timezone))
+    today = now.date()
+    if today < settings.start_date or today >= settings.final_date:
+        return
+    if now.hour < settings.checkin_hour:
+        return
+    logger.info("Startup checkin catch-up: past checkin hour, ensuring today's checkins")
+    await _send_daily_checkins(bot, storage)
+
+
+_DOW_TO_WEEKDAY = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+async def run_missed_summary_if_needed(bot: Bot) -> None:
+    now = datetime.now(ZoneInfo(settings.timezone))
+    target_weekday = _DOW_TO_WEEKDAY.get(settings.weekly_summary_dow.lower())
+    if target_weekday is None or now.date().weekday() != target_weekday:
+        return
+    if now.hour < settings.weekly_summary_hour:
+        return
+    logger.info("Startup summary catch-up: summary day past summary hour, ensuring weekly summary")
+    await _send_weekly_summary(bot)

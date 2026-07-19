@@ -62,3 +62,10 @@ class DailyCheckin(Base):
     __table_args__ = (UniqueConstraint("user_id", "day_number"),)
 
     user: Mapped["User"] = relationship(back_populates="checkins")
+
+
+class SentEvent(Base):
+    __tablename__ = "sent_events"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -2,14 +2,14 @@ import asyncio
 import logging
 import random
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from aiogram import Bot
 from aiogram.exceptions import TelegramRetryAfter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, MovementFormatChange, User
+from beg_k_sebe_bot.bot.database.models import DailyCheckin, MovementFormatChange, SentEvent, User
 from beg_k_sebe_bot.bot.services.movement_calc import total_movement
 from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.program import today_msk
@@ -23,6 +23,11 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
         return
 
     today = today_msk()
+    marker_key = f"weekly_summary:{today.isoformat()}"
+    if await session.get(SentEvent, marker_key) is not None:
+        logger.info("Weekly summary already sent for %s, skipping", today)
+        return
+
     week_start = today - timedelta(days=6)
     effective_start = max(week_start, settings.start_date)
 
@@ -94,8 +99,10 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
         motivation=random.choice(msg.WEEKLY_MOTIVATION_PHRASES),
     )
 
+    sent = False
     try:
         await bot.send_message(settings.group_chat_id, text)
+        sent = True
         logger.info(
             "Weekly summary sent: users=%d answered=%d expected=%d pct=%d%%",
             len(users), len(answered_checkins), expected_total, completion_pct,
@@ -104,5 +111,10 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
         logger.warning("Rate limited sending weekly summary, retrying after %ds", e.retry_after)
         await asyncio.sleep(e.retry_after)
         await bot.send_message(settings.group_chat_id, text)
+        sent = True
     except Exception as e:
         logger.error("Failed to send weekly summary: %s", e)
+
+    if sent:
+        session.add(SentEvent(key=marker_key, sent_at=datetime.now(timezone.utc)))
+        await session.commit()
