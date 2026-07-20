@@ -1,10 +1,12 @@
 import asyncio
 import logging
+from contextlib import suppress
 from datetime import date, datetime, timezone
 from aiogram import Router, Bot, F
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.state import State, StatesGroup, default_state
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -141,6 +143,14 @@ async def handle_practice(callback: CallbackQuery, state: FSMContext, session: A
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(msg.CHECKIN_Q3)
     await state.set_state(CheckinStates.waiting_energy)
+    await callback.answer()
+
+
+@router.callback_query(StateFilter(default_state), F.data.startswith("ci:"))
+async def handle_stale_checkin(callback: CallbackQuery) -> None:
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer(msg.CHECKIN_ALREADY_DONE)
     await callback.answer()
 
 
