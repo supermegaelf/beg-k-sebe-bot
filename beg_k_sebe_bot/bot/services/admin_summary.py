@@ -10,13 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.models import DailyCheckin, SentEvent, User, WeeklyReflection
-from beg_k_sebe_bot.bot.handlers.change_format import FORMAT_LABELS
 from beg_k_sebe_bot.bot.services import stats
 from beg_k_sebe_bot.bot.utils.program import today_msk
 
 logger = logging.getLogger(__name__)
 
 _PROGRAM_DAYS = settings.final_program_day - 1
+
+# Plain format names for the export (no emoji, one word).
+_FORMAT_NAME = {"walk_22min": "ходьба", "run_22min": "бег", "own": "другое"}
 
 _COLUMNS = [
     "telegram_id", "username", "onboarding_date", "format",
@@ -30,7 +32,7 @@ _COLUMNS = [
 
 def _build_csv(users, checkins_by_user, reflection_by_user, today) -> bytes:
     buffer = io.StringIO()
-    writer = csv.writer(buffer)
+    writer = csv.writer(buffer, delimiter=";")  # ; opens straight into columns in RU Excel
     writer.writerow(_COLUMNS)
 
     for user in users:
@@ -49,7 +51,7 @@ def _build_csv(users, checkins_by_user, reflection_by_user, today) -> bytes:
             user.telegram_id,
             user.username or "",
             onboarding_date.isoformat(),
-            FORMAT_LABELS.get(user.movement_format, user.movement_format or ""),
+            _FORMAT_NAME.get(user.movement_format, user.movement_format or ""),
             s.completed, s.missed, s.completion_pct,
             mins.get("walk", 0), mins.get("run", 0), mins.get("own", 0), s.total_minutes,
             f"{s.energy_avg:.1f}" if s.energy_avg is not None else "",
