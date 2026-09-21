@@ -129,9 +129,17 @@ async def handle_format(callback: CallbackQuery, state: FSMContext, session: Asy
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(msg.POINT_A_INTRO)
-    await callback.message.answer(msg.POINT_A_SCORE)
-    await state.set_state(OnboardingStates.waiting_point_a_score)
+    await state.set_state(OnboardingStates.waiting_point_a_text)
     await callback.answer()
+
+
+@router.message(OnboardingStates.waiting_point_a_text)
+async def handle_point_a_text(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    user = await session.get(User, message.from_user.id)
+    user.point_a_text = message.text
+    await session.commit()
+    await message.answer(msg.POINT_A_SCORE)
+    await state.set_state(OnboardingStates.waiting_point_a_score)
 
 
 @router.message(OnboardingStates.waiting_point_a_score)
@@ -142,20 +150,11 @@ async def handle_point_a_score(message: Message, state: FSMContext, session: Asy
         return
     user = await session.get(User, message.from_user.id)
     user.point_a_score = value
-    await session.commit()
-    await message.answer(msg.POINT_A_TEXT)
-    await state.set_state(OnboardingStates.waiting_point_a_text)
-
-
-@router.message(OnboardingStates.waiting_point_a_text)
-async def handle_point_a_text(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    user = await session.get(User, message.from_user.id)
-    user.point_a_text = message.text
     user.onboarding_completed_at = datetime.now(timezone.utc)
     await session.commit()
     await state.clear()
     await message.answer(
-        msg.ONBOARDING_COMPLETE.format(invite_link=settings.chat_invite_link),
+        msg.ONBOARDING_COMPLETE,
         reply_markup=checkin_reply_keyboard(),
-        disable_web_page_preview=True,
     )
+    await message.answer(msg.POINT_A_THANKS)
