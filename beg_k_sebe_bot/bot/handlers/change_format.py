@@ -1,5 +1,7 @@
+from contextlib import suppress
 from datetime import datetime, timezone
 from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,9 +13,9 @@ from beg_k_sebe_bot.bot.utils.program import current_program_day, today_msk
 router = Router()
 
 FORMAT_LABELS = {
-    "walk_22min": "🚶 22 мин быстрой ходьбы",
-    "run_22min": "🏃 22 мин бега",
-    "run_5km": "🏃 5 км бега",
+    "walk_22min": "🚶 22+ минут быстрой ходьбы",
+    "run_22min": "🏃 22+ минут бега",
+    "own": "🏃 22+ минут другого действия",
 }
 
 
@@ -31,7 +33,7 @@ async def cmd_change_format(message: Message, session: AsyncSession) -> None:
         return
 
     today = today_msk()
-    if today < settings.start_date or today > settings.final_date:
+    if today < settings.start_date or today >= settings.final_date:
         return
 
     current_label = FORMAT_LABELS.get(user.movement_format, user.movement_format)
@@ -61,6 +63,7 @@ async def handle_format_change(callback: CallbackQuery, session: AsyncSession) -
     await session.commit()
 
     label = FORMAT_LABELS[new_format]
-    await callback.message.edit_reply_markup(reply_markup=None)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
     await callback.message.answer(f"Формат обновлён: {label}")
     await callback.answer()

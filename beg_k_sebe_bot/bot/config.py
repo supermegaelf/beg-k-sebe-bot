@@ -17,8 +17,17 @@ class Settings(BaseSettings):
     checkin_hour: int = 20
     weekly_summary_dow: str = "mon"
     weekly_summary_hour: int = 9
+    weekly_reflection_dow: str = "sun"
+    weekly_reflection_hour: int = 19
+    admin_summary_dow: str = "mon"
+    admin_summary_hour: int = 10
+    admin_ids: str = ""
     final_program_day: int = 31
     timezone: str = "Europe/Moscow"
+
+    @property
+    def admin_id_list(self) -> list[int]:
+        return [int(x) for x in self.admin_ids.replace(" ", "").split(",") if x]
 
     @property
     def final_date(self) -> date:

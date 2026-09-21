@@ -27,6 +27,7 @@ class User(Base):
 
     checkins: Mapped[list["DailyCheckin"]] = relationship(back_populates="user")
     format_changes: Mapped[list["MovementFormatChange"]] = relationship(back_populates="user")
+    weekly_reflections: Mapped[list["WeeklyReflection"]] = relationship(back_populates="user")
 
 
 class MovementFormatChange(Base):
@@ -64,6 +65,26 @@ class DailyCheckin(Base):
     __table_args__ = (UniqueConstraint("user_id", "day_number"),)
 
     user: Mapped["User"] = relationship(back_populates="checkins")
+
+
+class WeeklyReflection(Base):
+    __tablename__ = "weekly_reflections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id"))
+    week_number: Mapped[int] = mapped_column(Integer)
+    result_text: Mapped[str | None] = mapped_column(Text)
+    helped_text: Mapped[str | None] = mapped_column(Text)
+    hardest_text: Mapped[str | None] = mapped_column(Text)
+    progress_text: Mapped[str | None] = mapped_column(Text)
+    share_text: Mapped[str | None] = mapped_column(Text)
+    shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(10), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (UniqueConstraint("user_id", "week_number"),)
+
+    user: Mapped["User"] = relationship(back_populates="weekly_reflections")
 
 
 class SentEvent(Base):
