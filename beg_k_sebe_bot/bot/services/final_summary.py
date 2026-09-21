@@ -1,100 +1,77 @@
+from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, MovementFormatChange, User
-from beg_k_sebe_bot.bot.services.movement_calc import total_movement
+from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
+from beg_k_sebe_bot.bot.services import stats
 from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.pluralize import pluralize
 
+_PROGRAM_DAYS = settings.final_program_day - 1  # check-in days (1..30)
+_FULL_SUMMARY_THRESHOLD_PCT = 40
+
 
 async def build_final_summary(user: User, session: AsyncSession) -> str:
-    checkins_result = await session.execute(
+    answered = (await session.execute(
         select(DailyCheckin).where(
             DailyCheckin.user_id == user.telegram_id,
             DailyCheckin.status == "answered",
         )
-    )
-    checkins = checkins_result.scalars().all()
+    )).scalars().all()
 
-    format_changes_result = await session.execute(
-        select(MovementFormatChange).where(MovementFormatChange.user_id == user.telegram_id)
+    onboarding_date = user.onboarding_completed_at.date() if user.onboarding_completed_at else settings.start_date
+    day_last = settings.start_date + timedelta(days=_PROGRAM_DAYS - 1)
+
+    s = stats.compute_stats(
+        start_date=settings.start_date,
+        program_days=_PROGRAM_DAYS,
+        onboarding_date=onboarding_date,
+        today=day_last,
+        checkins=answered,
     )
-    format_changes = format_changes_result.scalars().all()
+
+    if s.completion_pct < _FULL_SUMMARY_THRESHOLD_PCT:
+        return msg.FINAL_FALLBACK_HEADER + _goal_block(user)
 
     join_day = user.joined_at.date() if user.joined_at else settings.start_date
-    lived_days = (settings.final_date - join_day).days + 1
-    lived_days = max(1, min(lived_days, settings.final_program_day))
+    header_days = max(1, min((settings.final_date - join_day).days + 1, settings.final_program_day))
+    text = msg.FINAL_SUMMARY_HEADER.format(
+        days=header_days,
+        days_word=pluralize(header_days, "день", "дня", "дней"),
+    )
 
-    if len(checkins) / lived_days < 0.4:
-        return _build_fallback(user, lived_days)
+    mins = s.minutes_by_category
+    if mins.get("walk"):
+        text += msg.FINAL_MOVE_WALK.format(n=mins["walk"])
+    if mins.get("run"):
+        text += msg.FINAL_MOVE_RUN.format(n=mins["run"])
+    if mins.get("own"):
+        text += msg.FINAL_MOVE_OWN.format(n=mins["own"])
 
-    return _build_full(user, checkins, format_changes, lived_days)
+    text += _goal_block(user)
 
-
-def _build_fallback(user: User, lived_days: int) -> str:
-    text = msg.FINAL_FALLBACK_HEADER
-    text += msg.FINAL_WHEEL_HEADER
-    text += _wheel_deltas(user)
-    return text
-
-
-def _build_full(
-    user: User,
-    checkins: list[DailyCheckin],
-    format_changes: list[MovementFormatChange],
-    lived_days: int,
-) -> str:
-    days_word = pluralize(lived_days, "день", "дня", "дней")
-    text = msg.FINAL_SUMMARY_HEADER.format(days=lived_days, days_word=days_word)
-
-    totals = total_movement(checkins, format_changes, user.movement_format or "walk_22min")
-    if totals["min_walk"] > 0:
-        text += msg.FINAL_MOVEMENT_LINE.format(value=int(totals["min_walk"]), unit="мин ходьбы")
-    if totals["min_run"] > 0:
-        text += msg.FINAL_MOVEMENT_LINE.format(value=int(totals["min_run"]), unit="мин бега")
-    if totals["km_run"] > 0:
-        text += msg.FINAL_MOVEMENT_LINE.format(value=round(totals["km_run"], 1), unit="км бега")
-
-    text += msg.FINAL_WHEEL_HEADER
-    text += _wheel_deltas(user)
-
-    energy_phrase = _energy_phrase(checkins)
-    if energy_phrase:
-        text += energy_phrase
+    comparison = stats.energy_movement_comparison(answered)
+    if comparison:
+        text += msg.FINAL_ENERGY_PHRASE.format(with_movement=comparison[0], without_movement=comparison[1])
 
     return text
 
 
-def _wheel_deltas(user: User) -> str:
-    lines = ""
-    spheres = [
-        ("Деньги", user.wheel_a_money, user.wheel_b_money),
-        ("Отношения", user.wheel_a_relationships, user.wheel_b_relationships),
-        ("Здоровье", user.wheel_a_health, user.wheel_b_health),
-    ]
-    for sphere, a, b in spheres:
-        if a is None or b is None:
-            continue
-        delta = b - a
+def _goal_block(user: User) -> str:
+    text = msg.FINAL_GOAL_HEADER
+    text += msg.FINAL_GOAL_A.format(
+        score=user.point_a_score if user.point_a_score is not None else "—",
+        text=user.point_a_text or "",
+    )
+    if user.point_a_score is not None and user.point_b_score is not None:
+        delta = user.point_b_score - user.point_a_score
         direction = "+" if delta >= 0 else ""
-        delta_word = pluralize(abs(delta), "балл", "балла", "баллов")
-        lines += msg.FINAL_WHEEL_DELTA.format(
-            sphere=sphere, a=a, b=b,
-            direction=direction, delta=delta, delta_word=delta_word,
+        text += msg.FINAL_GOAL_B.format(
+            score=user.point_b_score,
+            text=user.point_b_text or "",
+            direction=direction,
+            delta=delta,
+            delta_word=pluralize(abs(delta), "балл", "балла", "баллов"),
         )
-    return lines
-
-
-def _energy_phrase(checkins: list[DailyCheckin]) -> str:
-    with_movement = [c.energy_level for c in checkins if c.movement_done in ("yes", "partial") and c.energy_level]
-    without_movement = [c.energy_level for c in checkins if c.movement_done == "no" and c.energy_level]
-    if not with_movement or not without_movement:
-        return ""
-    avg_with = sum(with_movement) / len(with_movement)
-    avg_without = sum(without_movement) / len(without_movement)
-    if avg_with > avg_without:
-        return msg.FINAL_ENERGY_PHRASE.format(
-            with_movement=avg_with, without_movement=avg_without
-        )
-    return ""
+    return text

@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from aiogram import Router, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -7,15 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.database.models import User
 from beg_k_sebe_bot.bot.texts import messages as msg
-from beg_k_sebe_bot.bot.utils.validators import parse_wheel_value
+from beg_k_sebe_bot.bot.utils.validators import parse_score
 
 router = Router()
 
 
 class FinalStates(StatesGroup):
-    waiting_wheel_b_money = State()
-    waiting_wheel_b_relationships = State()
-    waiting_wheel_b_health = State()
+    waiting_point_b_score = State()
+    waiting_point_b_text = State()
 
 
 async def send_final(user_id: int, bot: Bot, state: FSMContext, session: AsyncSession) -> None:
@@ -23,47 +21,40 @@ async def send_final(user_id: int, bot: Bot, state: FSMContext, session: AsyncSe
     if current is not None:
         return
 
-    await bot.send_message(user_id, msg.WHEEL_B_INTRO)
-    await bot.send_message(user_id, msg.WHEEL_B_MONEY)
-    await state.set_state(FinalStates.waiting_wheel_b_money)
-
-
-@router.message(FinalStates.waiting_wheel_b_money)
-async def handle_wheel_b_money(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = parse_wheel_value(message.text)
-    if value is None:
-        await message.answer(msg.WHEEL_INVALID)
+    user = await session.get(User, user_id)
+    if user is None:
         return
-    user = await session.get(User, message.from_user.id)
-    user.wheel_b_money = value
+    user.final_sent = True  # mark up front so a restart won't re-send the intro
     await session.commit()
-    await message.answer(msg.WHEEL_B_RELATIONSHIPS)
-    await state.set_state(FinalStates.waiting_wheel_b_relationships)
+
+    await bot.send_message(user_id, msg.FINAL_INTRO)
+    await bot.send_message(user_id, msg.FINAL_POINT_B_SCORE)
+    await state.set_state(FinalStates.waiting_point_b_score)
 
 
-@router.message(FinalStates.waiting_wheel_b_relationships)
-async def handle_wheel_b_relationships(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = parse_wheel_value(message.text)
+@router.message(FinalStates.waiting_point_b_score)
+async def handle_point_b_score(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    value = parse_score(message.text)
     if value is None:
-        await message.answer(msg.WHEEL_INVALID)
+        await message.answer(msg.SCORE_INVALID)
         return
     user = await session.get(User, message.from_user.id)
-    user.wheel_b_relationships = value
+    if user is None:
+        await state.clear()
+        return
+    user.point_b_score = value
     await session.commit()
-    await message.answer(msg.WHEEL_B_HEALTH)
-    await state.set_state(FinalStates.waiting_wheel_b_health)
+    await message.answer(msg.FINAL_POINT_B_TEXT)
+    await state.set_state(FinalStates.waiting_point_b_text)
 
 
-@router.message(FinalStates.waiting_wheel_b_health)
-async def handle_wheel_b_health(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    value = parse_wheel_value(message.text)
-    if value is None:
-        await message.answer(msg.WHEEL_INVALID)
-        return
-
+@router.message(FinalStates.waiting_point_b_text)
+async def handle_point_b_text(message: Message, state: FSMContext, session: AsyncSession) -> None:
     user = await session.get(User, message.from_user.id)
-    user.wheel_b_health = value
-    user.final_sent = True
+    if user is None:
+        await state.clear()
+        return
+    user.point_b_text = message.text
     await session.commit()
     await state.clear()
 

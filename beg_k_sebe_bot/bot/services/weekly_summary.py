@@ -9,12 +9,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, MovementFormatChange, SentEvent, User
-from beg_k_sebe_bot.bot.services.movement_calc import total_movement
+from beg_k_sebe_bot.bot.database.models import DailyCheckin, SentEvent, User
 from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.program import today_msk
 
 logger = logging.getLogger(__name__)
+
+# Movement lines are shown in this order, only when the value is above zero.
+_CATEGORY_LABELS = [
+    ("walk", "🚶 Ходьба"),
+    ("run", "🏃 Бег"),
+    ("own", "🏃 Своя активность"),
+]
 
 
 async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
@@ -23,97 +29,77 @@ async def send_weekly_summary(bot: Bot, session: AsyncSession) -> None:
         return
 
     today = today_msk()
+    week_end = today - timedelta(days=1)          # Sunday of the finished week
+    week_start = week_end - timedelta(days=6)     # its Monday
+
+    if week_end < settings.start_date:
+        logger.info("Finished week %s..%s is before start, skipping", week_start, week_end)
+        return
+
+    effective_start = max(week_start, settings.start_date)
+
     marker_key = f"weekly_summary:{today.isoformat()}"
     if await session.get(SentEvent, marker_key) is not None:
         logger.info("Weekly summary already sent for %s, skipping", today)
         return
 
-    week_start = today - timedelta(days=6)
-    effective_start = max(week_start, settings.start_date)
-
-    users_result = await session.execute(
+    users = (await session.execute(
         select(User).where(User.onboarding_completed_at.is_not(None))
-    )
-    users = users_result.scalars().all()
+    )).scalars().all()
     if not users:
         return
-
     user_ids = [u.telegram_id for u in users]
 
-    checkins_result = await session.execute(
+    answered = (await session.execute(
         select(DailyCheckin).where(
             DailyCheckin.date >= effective_start,
-            DailyCheckin.date <= today,
+            DailyCheckin.date <= week_end,
             DailyCheckin.status == "answered",
             DailyCheckin.user_id.in_(user_ids),
         )
-    )
-    answered_checkins = checkins_result.scalars().all()
+    )).scalars().all()
 
-    format_changes_result = await session.execute(
-        select(MovementFormatChange).where(MovementFormatChange.user_id.in_(user_ids))
-    )
-    all_format_changes = format_changes_result.scalars().all()
+    minutes_by_category: dict[str, float] = defaultdict(float)
+    for c in answered:
+        if c.minutes:
+            minutes_by_category[c.activity_category] += c.minutes
 
-    checkins_by_user: dict[int, list] = defaultdict(list)
-    for c in answered_checkins:
-        checkins_by_user[c.user_id].append(c)
-
-    format_changes_by_user: dict[int, list] = defaultdict(list)
-    for fc in all_format_changes:
-        format_changes_by_user[fc.user_id].append(fc)
-
-    total_min_walk = 0.0
-    total_min_run = 0.0
-    total_km_run = 0.0
-
-    for user in users:
-        user_checkins = checkins_by_user[user.telegram_id]
-        if not user_checkins:
-            continue
-        totals = total_movement(user_checkins, format_changes_by_user[user.telegram_id], user.movement_format or "walk_22min")
-        total_min_walk += totals["min_walk"]
-        total_min_run += totals["min_run"]
-        total_km_run += totals["km_run"]
-
-    expected_total = sum(
-        min(
-            (today - max(effective_start, u.onboarding_completed_at.date())).days + 1,
-            7,
-        )
-        for u in users
-    )
-    completion_pct = min(round(len(answered_checkins) / expected_total * 100), 100) if expected_total > 0 else 0
+    expected_total = 0
+    for u in users:
+        user_start = max(effective_start, u.onboarding_completed_at.date())
+        days = (week_end - user_start).days + 1
+        if days > 0:
+            expected_total += min(days, 7)
+    completion_pct = min(round(len(answered) / expected_total * 100), 100) if expected_total > 0 else 0
 
     movement_lines = ""
-    if total_min_walk > 0:
-        movement_lines += f"🚶 Ходьба: {int(total_min_walk)} мин\n"
-    if total_min_run > 0:
-        movement_lines += f"🏃 Бег: {int(total_min_run)} мин\n"
-    if total_km_run > 0:
-        movement_lines += f"🏃 Бег (дистанция): {total_km_run:.1f} км\n"
+    for key, label in _CATEGORY_LABELS:
+        total = minutes_by_category.get(key, 0)
+        if total > 0:
+            movement_lines += f"{label}: {int(total)} мин\n"
 
     text = msg.WEEKLY_SUMMARY.format(
-        movement_lines=movement_lines or "Данных о движении пока нет.\n",
+        movement_lines=movement_lines or msg.WEEKLY_NO_MOVEMENT,
         completion_pct=completion_pct,
         motivation=random.choice(msg.WEEKLY_MOTIVATION_PHRASES),
     )
 
     sent = False
-    try:
-        await bot.send_message(settings.group_chat_id, text)
-        sent = True
-        logger.info(
-            "Weekly summary sent: users=%d answered=%d expected=%d pct=%d%%",
-            len(users), len(answered_checkins), expected_total, completion_pct,
-        )
-    except TelegramRetryAfter as e:
-        logger.warning("Rate limited sending weekly summary, retrying after %ds", e.retry_after)
-        await asyncio.sleep(e.retry_after)
-        await bot.send_message(settings.group_chat_id, text)
-        sent = True
-    except Exception as e:
-        logger.error("Failed to send weekly summary: %s", e)
+    for attempt in range(2):
+        try:
+            await bot.send_message(settings.group_chat_id, text, message_thread_id=settings.info_topic_id)
+            sent = True
+            logger.info(
+                "Weekly summary sent for %s..%s: users=%d answered=%d expected=%d pct=%d%%",
+                effective_start, week_end, len(users), len(answered), expected_total, completion_pct,
+            )
+            break
+        except TelegramRetryAfter as e:
+            logger.warning("Rate limited sending weekly summary, retrying after %ds", e.retry_after)
+            await asyncio.sleep(e.retry_after)
+        except Exception as e:
+            logger.error("Failed to send weekly summary: %s", e)
+            break
 
     if sent:
         session.add(SentEvent(key=marker_key, sent_at=datetime.now(timezone.utc)))

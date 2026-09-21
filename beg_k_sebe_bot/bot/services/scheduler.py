@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot
@@ -14,11 +14,13 @@ from sqlalchemy import select, update
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
-from beg_k_sebe_bot.bot.handlers.daily_checkin import send_checkin
+from beg_k_sebe_bot.bot.database.models import DailyCheckin, SentEvent, User
+from beg_k_sebe_bot.bot.handlers.daily_checkin import checkin_reply_keyboard
 from beg_k_sebe_bot.bot.utils.program import today_msk
 from beg_k_sebe_bot.bot.handlers.final import send_final
+from beg_k_sebe_bot.bot.handlers.weekly_reflection import send_reflection_prompts
 from beg_k_sebe_bot.bot.services.weekly_summary import send_weekly_summary
+from beg_k_sebe_bot.bot.services.admin_summary import send_admin_summary
 from beg_k_sebe_bot.bot.texts import messages as msg
 
 logger = logging.getLogger(__name__)
@@ -27,57 +29,53 @@ logger = logging.getLogger(__name__)
 _MSG_INTERVAL = 1 / 20
 
 
-async def _send_daily_checkins(bot: Bot, storage: BaseStorage) -> None:
+async def _send_reminders(bot: Bot) -> None:
     today = today_msk()
     if today < settings.start_date or today >= settings.final_date:
         return
 
+    marker_key = f"checkin_reminders:{today.isoformat()}"
     is_day_30 = today == settings.start_date + timedelta(days=29)
 
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
+        if await session.get(SentEvent, marker_key) is not None:
+            logger.info("Reminders already sent for %s, skipping", today)
+            return
+
+        users = (await session.execute(
             select(User).where(User.onboarding_completed_at.is_not(None))
-        )
-        users = result.scalars().all()
+        )).scalars().all()
 
-    sent = skipped = errors = 0
+        today_checkins = (await session.execute(
+            select(DailyCheckin).where(DailyCheckin.date == today)
+        )).scalars().all()
+        status_by_user = {c.user_id: c.status for c in today_checkins}
+
+    reminded = warned = 0
     for user in users:
-        key = StorageKey(bot_id=bot.id, chat_id=user.telegram_id, user_id=user.telegram_id)
-        state = FSMContext(storage=storage, key=key)
-        current = await state.get_state()
-        if current is not None:
-            logger.warning("Skipping checkin for %d (@%s): FSM state=%s", user.telegram_id, user.username, current)
-            skipped += 1
-            continue
-
-        async with AsyncSessionLocal() as session:
-            existing = await session.execute(
-                select(DailyCheckin).where(
-                    DailyCheckin.user_id == user.telegram_id,
-                    DailyCheckin.date == today,
-                )
-            )
-            if existing.scalar_one_or_none() is not None:
-                logger.info("Checkin already exists for %d on %s, skipping", user.telegram_id, today)
-                skipped += 1
-                continue
-
+        status = status_by_user.get(user.telegram_id)
+        if status != "answered":
+            text = msg.CHECKIN_REMINDER_RESUME if status == "pending" else msg.CHECKIN_REMINDER
             try:
-                await send_checkin(user.telegram_id, bot, session, state, today)
-                sent += 1
+                await bot.send_message(user.telegram_id, text, reply_markup=checkin_reply_keyboard())
+                reminded += 1
             except Exception as e:
-                logger.error("Failed to send checkin to %d: %s", user.telegram_id, e)
-                errors += 1
+                logger.error("Failed to send reminder to %d: %s", user.telegram_id, e)
 
         if is_day_30:
             try:
                 await bot.send_message(user.telegram_id, msg.DAY_30_WARNING)
+                warned += 1
             except Exception as e:
                 logger.error("Failed to send day30 warning to %d: %s", user.telegram_id, e)
 
         await asyncio.sleep(_MSG_INTERVAL)
 
-    logger.info("Daily checkin done: sent=%d skipped=%d errors=%d total=%d", sent, skipped, errors, len(users))
+    async with AsyncSessionLocal() as session:
+        session.add(SentEvent(key=marker_key, sent_at=datetime.now(timezone.utc)))
+        await session.commit()
+
+    logger.info("Reminders done: reminded=%d warned=%d total=%d", reminded, warned, len(users))
 
 
 async def _mark_missed(bot: Bot, storage: BaseStorage) -> None:
@@ -106,6 +104,16 @@ async def _send_weekly_summary(bot: Bot) -> None:
         await send_weekly_summary(bot, session)
 
 
+async def _send_reflection_prompts(bot: Bot) -> None:
+    async with AsyncSessionLocal() as session:
+        await send_reflection_prompts(bot, session)
+
+
+async def _send_admin_summary(bot: Bot) -> None:
+    async with AsyncSessionLocal() as session:
+        await send_admin_summary(bot, session)
+
+
 async def _trigger_final(bot: Bot, storage: BaseStorage) -> None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
@@ -129,10 +137,10 @@ def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
 
     scheduler.add_job(
-        _send_daily_checkins,
+        _send_reminders,
         trigger=CronTrigger(hour=settings.checkin_hour, minute=0, timezone=tz),
-        args=[bot, storage],
-        id="daily_checkin",
+        args=[bot],
+        id="checkin_reminders",
         misfire_grace_time=3600,
     )
     scheduler.add_job(
@@ -147,6 +155,18 @@ def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
         trigger=CronTrigger(day_of_week=settings.weekly_summary_dow, hour=settings.weekly_summary_hour, minute=0, timezone=tz),
         args=[bot],
         id="weekly_summary",
+    )
+    scheduler.add_job(
+        _send_reflection_prompts,
+        trigger=CronTrigger(day_of_week=settings.weekly_reflection_dow, hour=settings.weekly_reflection_hour, minute=0, timezone=tz),
+        args=[bot],
+        id="weekly_reflection",
+    )
+    scheduler.add_job(
+        _send_admin_summary,
+        trigger=CronTrigger(day_of_week=settings.admin_summary_dow, hour=settings.admin_summary_hour, minute=0, timezone=tz),
+        args=[bot],
+        id="admin_summary",
     )
 
     tz_obj = ZoneInfo(settings.timezone)
@@ -177,8 +197,8 @@ async def run_missed_checkin_if_needed(bot: Bot, storage: BaseStorage) -> None:
         return
     if now.hour < settings.checkin_hour:
         return
-    logger.info("Startup checkin catch-up: past checkin hour, ensuring today's checkins")
-    await _send_daily_checkins(bot, storage)
+    logger.info("Startup checkin catch-up: past reminder hour, ensuring today's reminders")
+    await _send_reminders(bot)
 
 
 _DOW_TO_WEEKDAY = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}

@@ -1,178 +1,274 @@
-import asyncio
 import logging
+from contextlib import suppress
 from datetime import date, datetime, timezone
-from aiogram import Router, Bot, F
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram import Router, F
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
-from beg_k_sebe_bot.bot.services.movement_calc import KM_INPUT_FORMATS
+from beg_k_sebe_bot.bot.services.stats import current_streak
 from beg_k_sebe_bot.bot.texts import messages as msg
+from beg_k_sebe_bot.bot.utils.access import is_group_member
+from beg_k_sebe_bot.bot.utils.program import today_msk
+from beg_k_sebe_bot.bot.utils.validators import parse_score
 
 logger = logging.getLogger(__name__)
 router = Router()
 
+_FORMAT_TO_CATEGORY = {"walk_22min": "walk", "run_22min": "run", "own": "own"}
+_MAX_MINUTES = 1440
+
 
 class CheckinStates(StatesGroup):
     waiting_movement = State()
-    waiting_run_km = State()
+    waiting_minutes = State()
     waiting_practice = State()
     waiting_energy = State()
+    waiting_help = State()
+    waiting_hardest = State()
     waiting_shift = State()
 
 
-def _yes_partial_no_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Да", callback_data="ci:yes"),
-        InlineKeyboardButton(text="Частично", callback_data="ci:partial"),
-        InlineKeyboardButton(text="Нет", callback_data="ci:no"),
-    ]])
-
-
-def _skip_km_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Пропустить", callback_data="runkm:skip"),
-    ]])
-
-
-async def send_checkin(user_id: int, bot: Bot, session: AsyncSession, state: FSMContext, today: date) -> None:
-    day = (today - settings.start_date).days + 1
-
-    checkin = DailyCheckin(
-        user_id=user_id,
-        day_number=day,
-        date=today,
-        status="pending",
+def checkin_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=msg.CHECKIN_START_BUTTON)],
+            [KeyboardButton(text=msg.MY_PROGRESS_BUTTON)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
     )
-    session.add(checkin)
-
-    for attempt in range(3):
-        try:
-            await bot.send_message(user_id, msg.CHECKIN_Q1, reply_markup=_yes_partial_no_keyboard())
-            break
-        except TelegramRetryAfter as e:
-            if attempt == 2:
-                raise
-            logger.warning("Rate limited sending checkin to %d, retrying after %ds", user_id, e.retry_after)
-            await asyncio.sleep(e.retry_after)
-
-    await session.commit()
-    await state.set_state(CheckinStates.waiting_movement)
 
 
-async def _get_pending_checkin(user_id: int, session: AsyncSession) -> DailyCheckin | None:
+def _ypn_keyboard(prefix: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Да", callback_data=f"{prefix}:yes"),
+        InlineKeyboardButton(text="Частично", callback_data=f"{prefix}:partial"),
+        InlineKeyboardButton(text="Нет", callback_data=f"{prefix}:no"),
+    ]])
+
+
+def _skip_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Пропустить", callback_data="min:skip"),
+    ]])
+
+
+async def _get_today_checkin(user_id: int, session: AsyncSession, today: date) -> DailyCheckin | None:
     result = await session.execute(
         select(DailyCheckin).where(
             DailyCheckin.user_id == user_id,
-            DailyCheckin.status == "pending",
-        ).order_by(DailyCheckin.day_number.desc()).limit(1)
+            DailyCheckin.date == today,
+        )
     )
     return result.scalar_one_or_none()
 
 
-async def _ask_practice(message: Message, state: FSMContext) -> None:
-    await message.answer(msg.CHECKIN_Q2, reply_markup=_yes_partial_no_keyboard())
-    await state.set_state(CheckinStates.waiting_practice)
+def _resume_state(checkin: DailyCheckin) -> State:
+    if checkin.movement_done is None:
+        return CheckinStates.waiting_movement
+    if checkin.minutes is None:
+        return CheckinStates.waiting_minutes
+    if checkin.practice_done is None:
+        return CheckinStates.waiting_practice
+    if checkin.energy_level is None:
+        return CheckinStates.waiting_energy
+    if checkin.help_text is None:
+        return CheckinStates.waiting_help
+    if checkin.hardest_text is None:
+        return CheckinStates.waiting_hardest
+    return CheckinStates.waiting_shift
 
 
-@router.callback_query(CheckinStates.waiting_movement, F.data.startswith("ci:"))
-async def handle_movement(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
-    checkin = await _get_pending_checkin(callback.from_user.id, session)
-    if checkin is None:
-        await callback.answer()
+async def _ask(message: Message, state: FSMContext, target: State) -> None:
+    await state.set_state(target)
+    if target == CheckinStates.waiting_movement:
+        await message.answer(msg.CHECKIN_Q1, reply_markup=_ypn_keyboard("mv"))
+    elif target == CheckinStates.waiting_minutes:
+        await message.answer(msg.CHECKIN_MINUTES, reply_markup=_skip_keyboard())
+    elif target == CheckinStates.waiting_practice:
+        await message.answer(msg.CHECKIN_Q2, reply_markup=_ypn_keyboard("pr"))
+    elif target == CheckinStates.waiting_energy:
+        await message.answer(msg.CHECKIN_ENERGY)
+    elif target == CheckinStates.waiting_help:
+        await message.answer(msg.CHECKIN_HELP)
+    elif target == CheckinStates.waiting_hardest:
+        await message.answer(msg.CHECKIN_HARDEST)
+    elif target == CheckinStates.waiting_shift:
+        await message.answer(msg.CHECKIN_SHIFT)
+
+
+@router.message(F.text == msg.CHECKIN_START_BUTTON)
+async def start_checkin(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    today = today_msk()
+    if today < settings.start_date or today >= settings.final_date:
+        await message.answer(msg.CHECKIN_UNAVAILABLE)
         return
 
-    value = callback.data.split(":")[1]
-    checkin.movement_done = value
+    if not await is_group_member(message.bot, message.from_user.id):
+        await message.answer(
+            msg.CHAT_GATE_CHECKIN.format(invite_link=settings.chat_invite_link),
+            disable_web_page_preview=True,
+        )
+        return
+
+    checkin = await _get_today_checkin(message.from_user.id, session, today)
+
+    if checkin is not None and checkin.status != "pending":
+        await message.answer(msg.CHECKIN_ALREADY_DONE)
+        return
+
+    if checkin is None:
+        user = await session.get(User, message.from_user.id)
+        checkin = DailyCheckin(
+            user_id=message.from_user.id,
+            day_number=(today - settings.start_date).days + 1,
+            date=today,
+            status="pending",
+            activity_category=_FORMAT_TO_CATEGORY.get(user.movement_format if user else None),
+        )
+        session.add(checkin)
+        await session.commit()
+        await _ask(message, state, CheckinStates.waiting_movement)
+        return
+
+    # Pending check-in exists — resume where the dialog left off, never a second one.
+    await _ask(message, state, _resume_state(checkin))
+
+
+@router.callback_query(CheckinStates.waiting_movement, F.data.startswith("mv:"))
+async def handle_movement(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    checkin = await _get_today_checkin(callback.from_user.id, session, today_msk())
+    if checkin is None or checkin.status != "pending":
+        await state.clear()
+        await callback.answer()
+        return
+    checkin.movement_done = callback.data.split(":")[1]
     await session.commit()
-
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    user = await session.get(User, callback.from_user.id)
-    if value in ("yes", "partial") and user and user.movement_format in KM_INPUT_FORMATS:
-        await callback.message.answer(msg.CHECKIN_RUN_KM, reply_markup=_skip_km_keyboard())
-        await state.set_state(CheckinStates.waiting_run_km)
-    else:
-        await _ask_practice(callback.message, state)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await _ask(callback.message, state, CheckinStates.waiting_minutes)
     await callback.answer()
 
 
-@router.callback_query(CheckinStates.waiting_run_km, F.data == "runkm:skip")
-async def handle_run_km_skip(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await _ask_practice(callback.message, state)
+@router.callback_query(CheckinStates.waiting_minutes, F.data == "min:skip")
+async def handle_minutes_skip(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+    checkin = await _get_today_checkin(callback.from_user.id, session, today_msk())
+    if checkin is None or checkin.status != "pending":
+        await state.clear()
+        await callback.answer()
+        return
+    checkin.minutes = 0
+    await session.commit()
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await _ask(callback.message, state, CheckinStates.waiting_practice)
     await callback.answer()
 
 
-@router.message(CheckinStates.waiting_run_km)
-async def handle_run_km(message: Message, state: FSMContext, session: AsyncSession) -> None:
+@router.message(CheckinStates.waiting_minutes)
+async def handle_minutes(message: Message, state: FSMContext, session: AsyncSession) -> None:
     try:
-        run_km = float(message.text.strip().replace(",", "."))
-        if not 0 < run_km <= 200:
+        minutes = int(message.text.strip())
+        if not 0 <= minutes <= _MAX_MINUTES:
             raise ValueError
     except (ValueError, AttributeError):
-        await message.answer(msg.CHECKIN_RUN_KM_INVALID)
+        await message.answer(msg.CHECKIN_MINUTES_INVALID)
         return
-
-    checkin = await _get_pending_checkin(message.from_user.id, session)
-    if checkin is None:
+    checkin = await _get_today_checkin(message.from_user.id, session, today_msk())
+    if checkin is None or checkin.status != "pending":
+        await state.clear()
         return
-
-    checkin.run_km = run_km
+    checkin.minutes = minutes
     await session.commit()
-    await _ask_practice(message, state)
+    await _ask(message, state, CheckinStates.waiting_practice)
 
 
-@router.callback_query(CheckinStates.waiting_practice, F.data.startswith("ci:"))
+@router.callback_query(CheckinStates.waiting_practice, F.data.startswith("pr:"))
 async def handle_practice(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
-    checkin = await _get_pending_checkin(callback.from_user.id, session)
-    if checkin is None:
+    checkin = await _get_today_checkin(callback.from_user.id, session, today_msk())
+    if checkin is None or checkin.status != "pending":
+        await state.clear()
         await callback.answer()
         return
-
     checkin.practice_done = callback.data.split(":")[1]
     await session.commit()
-
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(msg.CHECKIN_Q3)
-    await state.set_state(CheckinStates.waiting_energy)
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=None)
+    await _ask(callback.message, state, CheckinStates.waiting_energy)
     await callback.answer()
 
 
 @router.message(CheckinStates.waiting_energy)
 async def handle_energy(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    try:
-        value = int(message.text.strip())
-        if not 1 <= value <= 10:
-            raise ValueError
-    except ValueError:
-        await message.answer(msg.WHEEL_INVALID)
+    value = parse_score(message.text)
+    if value is None:
+        await message.answer(msg.SCORE_INVALID)
         return
-
-    checkin = await _get_pending_checkin(message.from_user.id, session)
-    if checkin is None:
+    checkin = await _get_today_checkin(message.from_user.id, session, today_msk())
+    if checkin is None or checkin.status != "pending":
+        await state.clear()
         return
-
     checkin.energy_level = value
     await session.commit()
+    await _ask(message, state, CheckinStates.waiting_help)
 
-    await message.answer(msg.CHECKIN_Q4)
-    await state.set_state(CheckinStates.waiting_shift)
+
+@router.message(CheckinStates.waiting_help)
+async def handle_help(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    checkin = await _get_today_checkin(message.from_user.id, session, today_msk())
+    if checkin is None or checkin.status != "pending":
+        await state.clear()
+        return
+    checkin.help_text = message.text
+    await session.commit()
+    await _ask(message, state, CheckinStates.waiting_hardest)
+
+
+@router.message(CheckinStates.waiting_hardest)
+async def handle_hardest(message: Message, state: FSMContext, session: AsyncSession) -> None:
+    checkin = await _get_today_checkin(message.from_user.id, session, today_msk())
+    if checkin is None or checkin.status != "pending":
+        await state.clear()
+        return
+    checkin.hardest_text = message.text
+    await session.commit()
+    await _ask(message, state, CheckinStates.waiting_shift)
 
 
 @router.message(CheckinStates.waiting_shift)
 async def handle_shift(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    checkin = await _get_pending_checkin(message.from_user.id, session)
-    if checkin is None:
+    checkin = await _get_today_checkin(message.from_user.id, session, today_msk())
+    if checkin is None or checkin.status != "pending":
+        await state.clear()
         return
-
     checkin.shift_text = message.text
     checkin.status = "answered"
     checkin.answered_at = datetime.now(timezone.utc)
     await session.commit()
     await state.clear()
+    await _maybe_streak_message(message, session)
+
+
+async def _maybe_streak_message(message: Message, session: AsyncSession) -> None:
+    user = await session.get(User, message.from_user.id)
+    if user is None or user.onboarding_completed_at is None:
+        return
+    checkins = (await session.execute(
+        select(DailyCheckin).where(DailyCheckin.user_id == message.from_user.id)
+    )).scalars().all()
+    user_start = max(settings.start_date, user.onboarding_completed_at.date())
+    if current_streak(checkins, today_msk(), user_start) == 3:
+        await message.answer(msg.STREAK_SUPPORT)

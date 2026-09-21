@@ -11,7 +11,9 @@ from aiogram.types import BotCommand, CallbackQuery, Message
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal, create_tables
-from beg_k_sebe_bot.bot.handlers import onboarding, daily_checkin, change_format, final
+from beg_k_sebe_bot.bot.handlers import (
+    onboarding, daily_checkin, change_format, final, progress, weekly_reflection,
+)
 from beg_k_sebe_bot.bot.middleware import DbSessionMiddleware
 from beg_k_sebe_bot.bot.services.scheduler import (
     build_scheduler,
@@ -50,6 +52,8 @@ async def main() -> None:
 
     dp.include_router(onboarding.router)
     dp.include_router(daily_checkin.router)
+    dp.include_router(progress.router)
+    dp.include_router(weekly_reflection.router)
     dp.include_router(change_format.router)
     dp.include_router(final.router)
     dp.include_router(_ignore_router)
