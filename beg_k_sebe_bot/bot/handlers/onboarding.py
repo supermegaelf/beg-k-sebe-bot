@@ -69,6 +69,7 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession) 
         await message.answer(
             msg.CHAT_GATE.format(invite_link=settings.chat_invite_link),
             reply_markup=_check_access_keyboard(),
+            disable_web_page_preview=True,
         )
         return
 
@@ -156,4 +157,5 @@ async def handle_point_a_text(message: Message, state: FSMContext, session: Asyn
     await message.answer(
         msg.ONBOARDING_COMPLETE.format(invite_link=settings.chat_invite_link),
         reply_markup=checkin_reply_keyboard(),
+        disable_web_page_preview=True,
     )

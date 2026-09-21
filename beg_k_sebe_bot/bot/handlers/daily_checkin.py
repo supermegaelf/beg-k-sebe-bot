@@ -118,7 +118,10 @@ async def start_checkin(message: Message, state: FSMContext, session: AsyncSessi
         return
 
     if not await is_group_member(message.bot, message.from_user.id):
-        await message.answer(msg.CHAT_GATE_CHECKIN.format(invite_link=settings.chat_invite_link))
+        await message.answer(
+            msg.CHAT_GATE_CHECKIN.format(invite_link=settings.chat_invite_link),
+            disable_web_page_preview=True,
+        )
         return
 
     checkin = await _get_today_checkin(message.from_user.id, session, today)
