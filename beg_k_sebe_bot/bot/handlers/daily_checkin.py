@@ -259,6 +259,7 @@ async def handle_shift(message: Message, state: FSMContext, session: AsyncSessio
     checkin.answered_at = datetime.now(timezone.utc)
     await session.commit()
     await state.clear()
+    await message.answer(msg.CHECKIN_THANKS)
     await _maybe_streak_message(message, session)
 
 

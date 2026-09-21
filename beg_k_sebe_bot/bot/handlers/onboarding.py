@@ -157,4 +157,3 @@ async def handle_point_a_score(message: Message, state: FSMContext, session: Asy
         msg.ONBOARDING_COMPLETE,
         reply_markup=checkin_reply_keyboard(),
     )
-    await message.answer(msg.POINT_A_THANKS)
