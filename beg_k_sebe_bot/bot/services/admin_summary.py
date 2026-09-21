@@ -97,7 +97,7 @@ def _build_xlsx(users, checkins_by_user, reflection_by_user, today) -> bytes:
     for i, user in enumerate(users, start=2):
         for col, value in enumerate(_row(user, checkins_by_user, reflection_by_user, today), start=1):
             cell = ws.cell(row=i, column=col, value=value)
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
             cell.border = border
 
     ws.row_dimensions[1].height = 45
