@@ -117,6 +117,11 @@ async def start_checkin(message: Message, state: FSMContext, session: AsyncSessi
         await message.answer(msg.CHECKIN_UNAVAILABLE)
         return
 
+    user = await session.get(User, message.from_user.id)
+    if user is None or user.onboarding_completed_at is None:
+        await message.answer(msg.NEED_ONBOARDING)
+        return
+
     if not await is_group_member(message.bot, message.from_user.id):
         await message.answer(
             msg.CHAT_GATE_CHECKIN.format(invite_link=settings.chat_invite_link),
@@ -131,13 +136,12 @@ async def start_checkin(message: Message, state: FSMContext, session: AsyncSessi
         return
 
     if checkin is None:
-        user = await session.get(User, message.from_user.id)
         checkin = DailyCheckin(
             user_id=message.from_user.id,
             day_number=(today - settings.start_date).days + 1,
             date=today,
             status="pending",
-            activity_category=_FORMAT_TO_CATEGORY.get(user.movement_format if user else None),
+            activity_category=_FORMAT_TO_CATEGORY.get(user.movement_format),
         )
         session.add(checkin)
         await session.commit()

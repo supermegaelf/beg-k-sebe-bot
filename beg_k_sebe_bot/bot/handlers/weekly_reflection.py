@@ -88,6 +88,13 @@ async def send_reflection_prompts(bot: Bot, session: AsyncSession) -> None:
 @router.callback_query(F.data == "reflect:start")
 async def start_reflection(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     week = _week_number(today_msk())
+
+    user = await session.get(User, callback.from_user.id)
+    if user is None or user.onboarding_completed_at is None:
+        await callback.answer()
+        await callback.message.answer(msg.NEED_ONBOARDING)
+        return
+
     reflection = await _get_reflection(callback.from_user.id, week, session)
 
     if reflection is not None and reflection.status == "answered":
