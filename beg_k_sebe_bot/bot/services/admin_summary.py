@@ -37,17 +37,42 @@ _COLUMNS = [
     ("Всего минут движения", 15),
     ("Средняя оценка состояния (1–10)", 20),
     ("Серия подряд, дней", 14),
-    ("Неделя рефлексии", 14),
-    ("Рефлексия: результат", 34),
-    ("Рефлексия: что помогало", 34),
-    ("Рефлексия: сложнее всего", 34),
-    ("Рефлексия: ближе к цели", 34),
-    ("Рефлексия: чем поделиться", 34),
+    ("Точка А: оценка (1–10)", 13),
+    ("Точка А: описание", 40),
+    ("Точка Б: оценка (1–10)", 13),
+    ("Точка Б: описание", 40),
+    ("Ежедневно: что помогло (по дням)", 50),
+    ("Ежедневно: что было сложнее всего (по дням)", 50),
+    ("Ежедневно: что сдвинулось к цели (по дням)", 50),
+    ("Рефлексия: результат недели (по неделям)", 50),
+    ("Рефлексия: что помогало (по неделям)", 50),
+    ("Рефлексия: сложнее всего (по неделям)", 50),
+    ("Рефлексия: ближе к цели (по неделям)", 50),
+    ("Рефлексия: чем поделиться (по неделям)", 50),
 ]
 
 
-def _row(user, checkins_by_user, reflection_by_user, today) -> list:
+def _daily_col(checkins, field) -> str:
+    """Копит ответы по дням в одной ячейке: «Д1: …», «Д2: …». История не теряется."""
+    answered = sorted(
+        (c for c in checkins if c.status == "answered" and getattr(c, field)),
+        key=lambda c: c.day_number,
+    )
+    return "\n".join(f"Д{c.day_number}: {getattr(c, field)}" for c in answered)
+
+
+def _weekly_col(reflections, field) -> str:
+    """Копит ответы по неделям в одной ячейке: «Н1: …», «Н2: …»."""
+    answered = sorted(
+        (r for r in reflections if getattr(r, field)),
+        key=lambda r: r.week_number,
+    )
+    return "\n".join(f"Н{r.week_number}: {getattr(r, field)}" for r in answered)
+
+
+def _row(user, checkins_by_user, reflections_by_user, today) -> list:
     checkins = checkins_by_user.get(user.telegram_id, [])
+    reflections = reflections_by_user.get(user.telegram_id, [])
     onboarding_date = user.onboarding_completed_at.date() if user.onboarding_completed_at else settings.start_date
     s = stats.compute_stats(
         start_date=settings.start_date,
@@ -57,7 +82,6 @@ def _row(user, checkins_by_user, reflection_by_user, today) -> list:
         checkins=checkins,
     )
     mins = s.minutes_by_category
-    r = reflection_by_user.get(user.telegram_id)
     return [
         str(user.telegram_id),
         user.username or "",
@@ -67,16 +91,22 @@ def _row(user, checkins_by_user, reflection_by_user, today) -> list:
         mins.get("walk", 0), mins.get("run", 0), mins.get("own", 0), s.total_minutes,
         round(s.energy_avg, 1) if s.energy_avg is not None else "",
         s.current_streak,
-        r.week_number if r else "",
-        (r.result_text if r else "") or "",
-        (r.helped_text if r else "") or "",
-        (r.hardest_text if r else "") or "",
-        (r.progress_text if r else "") or "",
-        (r.share_text if r else "") or "",
+        user.point_a_score if user.point_a_score is not None else "",
+        user.point_a_text or "",
+        user.point_b_score if user.point_b_score is not None else "",
+        user.point_b_text or "",
+        _daily_col(checkins, "help_text"),
+        _daily_col(checkins, "hardest_text"),
+        _daily_col(checkins, "shift_text"),
+        _weekly_col(reflections, "result_text"),
+        _weekly_col(reflections, "helped_text"),
+        _weekly_col(reflections, "hardest_text"),
+        _weekly_col(reflections, "progress_text"),
+        _weekly_col(reflections, "share_text"),
     ]
 
 
-def _build_xlsx(users, checkins_by_user, reflection_by_user, today) -> bytes:
+def _build_xlsx(users, checkins_by_user, reflections_by_user, today) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Участники"
@@ -95,7 +125,7 @@ def _build_xlsx(users, checkins_by_user, reflection_by_user, today) -> bytes:
         ws.column_dimensions[get_column_letter(col)].width = width
 
     for i, user in enumerate(users, start=2):
-        for col, value in enumerate(_row(user, checkins_by_user, reflection_by_user, today), start=1):
+        for col, value in enumerate(_row(user, checkins_by_user, reflections_by_user, today), start=1):
             cell = ws.cell(row=i, column=col, value=value)
             cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
             cell.border = border
@@ -141,13 +171,11 @@ async def send_admin_summary(bot: Bot, session: AsyncSession) -> None:
             WeeklyReflection.status == "answered",
         )
     )).scalars().all()
-    reflection_by_user: dict[int, WeeklyReflection] = {}
-    for r in reflections:  # keep the latest answered week per user
-        cur = reflection_by_user.get(r.user_id)
-        if cur is None or r.week_number > cur.week_number:
-            reflection_by_user[r.user_id] = r
+    reflections_by_user: dict[int, list] = defaultdict(list)
+    for r in reflections:  # keep every answered week so history accumulates
+        reflections_by_user[r.user_id].append(r)
 
-    data = _build_xlsx(users, checkins_by_user, reflection_by_user, today)
+    data = _build_xlsx(users, checkins_by_user, reflections_by_user, today)
     filename = f"beg_k_sebe_{today.isoformat()}.xlsx"
 
     sent = False
