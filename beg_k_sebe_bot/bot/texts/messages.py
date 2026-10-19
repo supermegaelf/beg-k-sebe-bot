@@ -130,7 +130,8 @@ ADMIN_PAYMENT = (
     "Счёт №{inv_id}"
 )
 ADMIN_PAYMENT_PROMO = "\nПромокод: {promo}"
-ADMIN_PAYMENT_OVER_LIMIT = "\n⚠️ Мест на «Трансформационный» больше лимита ({taken} из {limit})"
+ADMIN_PAYMENT_OVERPAID = "\n⚠️ Переплата {overpaid} ₽: тариф уже был оплачен, нужен возврат"
+ADMIN_PAYMENT_OVER_LIMIT ="\n⚠️ Мест на «Трансформационный» больше лимита ({taken} из {limit})"
 ADMIN_GRANT_USAGE = "Формат: /grant telegram_id basic|middle|transform"
 ADMIN_REVOKE_USAGE = "Формат: /revoke telegram_id"
 ADMIN_GRANT_OK = "Доступ выдан: {user_id}, тариф «{tariff}»."

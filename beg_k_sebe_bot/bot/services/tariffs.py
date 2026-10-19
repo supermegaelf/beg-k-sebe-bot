@@ -30,5 +30,12 @@ def upgrade_price(current: str, target: str) -> int | None:
     return TARIFFS[target].price - TARIFFS[current].price
 
 
+def overpayment(kind: str, tariff: str, amount: int, current: str | None) -> int:
+    if current is None:
+        return 0
+    due = upgrade_price(current, tariff) if kind == "upgrade" else None
+    return amount - (due or 0)
+
+
 def upgrade_targets(current: str) -> list[Tariff]:
     return [t for t in TARIFFS.values() if t.rank > TARIFFS[current].rank]

@@ -3,7 +3,7 @@ import json
 from urllib.parse import parse_qs, unquote, urlparse
 
 from beg_k_sebe_bot.bot.services import robokassa
-from beg_k_sebe_bot.bot.services.tariffs import purchase_price, upgrade_price, upgrade_targets
+from beg_k_sebe_bot.bot.services.tariffs import overpayment, purchase_price, upgrade_price, upgrade_targets
 
 
 def _md5(s):
@@ -85,6 +85,14 @@ def test_upgrade_price_is_full_price_difference():
     assert upgrade_price("middle", "transform") == 15000
     assert upgrade_price("middle", "basic") is None
     assert upgrade_price("transform", "transform") is None
+
+
+def test_overpayment():
+    assert overpayment("purchase", "basic", 3000, None) == 0
+    assert overpayment("upgrade", "middle", 4000, "basic") == 0
+    assert overpayment("purchase", "middle", 7000, "basic") == 7000
+    assert overpayment("upgrade", "transform", 19000, "middle") == 4000
+    assert overpayment("upgrade", "middle", 4000, "middle") == 4000
 
 
 def test_upgrade_targets():

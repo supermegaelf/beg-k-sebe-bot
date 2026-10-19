@@ -48,7 +48,7 @@ async def show_tariffs(message: Message, state: FSMContext, session: AsyncSessio
         await session.commit()
 
     promo = await _promo(state) is not None
-    available = await payments.transform_available(session)
+    available = await payments.transform_available(session, user_id)
 
     text = msg.TARIFFS.format(
         basic=_price_label("basic", promo),
@@ -110,7 +110,7 @@ def _consent_keyboard(action: str) -> InlineKeyboardMarkup:
 async def _send_payment_link(
     message: Message, session: AsyncSession, user_id: int, tariff: str, kind: str, amount: int, promo: str | None,
 ) -> None:
-    payment, url = await payments.create_payment(session, user_id, tariff, kind, amount, promo)
+    payment, url = await payments.get_or_create_payment(session, user_id, tariff, kind, amount, promo)
     await message.answer(
         msg.PAYMENT_LINK.format(tariff=TARIFFS[tariff].title, price=amount),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -150,7 +150,7 @@ async def _proceed(callback: CallbackQuery, state: FSMContext, session: AsyncSes
         promo = None
         payment_kind = "upgrade"
 
-    if tariff == TRANSFORM and not await payments.transform_available(session):
+    if tariff == TRANSFORM and not await payments.transform_available(session, user_id):
         await callback.message.answer(msg.TRANSFORM_SOLD_OUT.strip())
         return
 
@@ -214,7 +214,7 @@ async def cmd_tariff(message: Message, session: AsyncSession) -> None:
     text = msg.MY_TARIFF.format(tariff=TARIFFS[access.tariff].title, until=payments.format_date(access.access_until))
     rows = await chat_buttons(message.bot, access.tariff)
     if today_msk() < settings.final_date:
-        transform_open = await payments.transform_available(session)
+        transform_open = await payments.transform_available(session, message.from_user.id)
         targets = [t for t in upgrade_targets(access.tariff) if t.key != TRANSFORM or transform_open]
         if targets:
             text += msg.MY_TARIFF_UPGRADE

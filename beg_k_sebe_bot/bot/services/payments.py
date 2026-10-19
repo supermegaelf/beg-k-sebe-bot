@@ -14,7 +14,7 @@ from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal
 from beg_k_sebe_bot.bot.database.models import Access, Payment, User
 from beg_k_sebe_bot.bot.services import robokassa
 from beg_k_sebe_bot.bot.services.chat_access import chat_buttons
-from beg_k_sebe_bot.bot.services.tariffs import TARIFFS, TRANSFORM
+from beg_k_sebe_bot.bot.services.tariffs import TARIFFS, TRANSFORM, overpayment
 from beg_k_sebe_bot.bot.texts import messages as msg
 
 logger = logging.getLogger(__name__)
@@ -27,31 +27,47 @@ def format_date(d) -> str:
     return d.strftime("%d.%m.%Y")
 
 
-async def transform_seats_taken(session: AsyncSession) -> int:
-    paid = await session.scalar(select(func.count()).select_from(Access).where(Access.tariff == TRANSFORM))
+def _open_payment_filter():
+    return (Payment.status == "pending", Payment.created_at > datetime.now(timezone.utc) - PAYMENT_TTL)
+
+
+async def transform_seats_taken(session: AsyncSession, user_id: int) -> int:
+    transform_users = select(Access.user_id).where(Access.tariff == TRANSFORM)
+    paid = await session.scalar(select(func.count()).select_from(transform_users.subquery()))
     reserved = await session.scalar(
-        select(func.count()).select_from(Payment).where(
+        select(func.count(func.distinct(Payment.user_id))).where(
             Payment.tariff == TRANSFORM,
-            Payment.status == "pending",
-            Payment.created_at > datetime.now(timezone.utc) - PAYMENT_TTL,
+            *_open_payment_filter(),
+            Payment.user_id.not_in(transform_users),
+            Payment.user_id != user_id,
         )
     )
     return paid + reserved
 
 
-async def transform_available(session: AsyncSession) -> bool:
-    return await transform_seats_taken(session) < settings.transform_seats
+async def transform_available(session: AsyncSession, user_id: int) -> bool:
+    return await transform_seats_taken(session, user_id) < settings.transform_seats
 
 
-async def create_payment(
+async def get_or_create_payment(
     session: AsyncSession, user_id: int, tariff: str, kind: str, amount: int, promo_code: str | None,
 ) -> tuple[Payment, str]:
-    payment = Payment(
-        user_id=user_id, tariff=tariff, kind=kind, amount=amount, promo_code=promo_code,
-        status="pending", created_at=datetime.now(timezone.utc),
+    payment = await session.scalar(
+        select(Payment)
+        .where(
+            Payment.user_id == user_id, Payment.tariff == tariff, Payment.kind == kind,
+            Payment.amount == amount, *_open_payment_filter(),
+        )
+        .order_by(Payment.inv_id.desc())
+        .limit(1)
     )
-    session.add(payment)
-    await session.commit()
+    if payment is None:
+        payment = Payment(
+            user_id=user_id, tariff=tariff, kind=kind, amount=amount, promo_code=promo_code,
+            status="pending", created_at=datetime.now(timezone.utc),
+        )
+        session.add(payment)
+        await session.commit()
 
     title = TARIFFS[tariff].title
     url = robokassa.payment_url(
@@ -62,13 +78,12 @@ async def create_payment(
         description=f"Бег к себе - тариф {title}",
         receipt_item=f"Участие в потоке Бег к себе, тариф {title}",
         is_test=settings.robokassa_is_test,
-        expiration=datetime.now(ZoneInfo(settings.timezone)) + PAYMENT_TTL,
+        expiration=payment.created_at.astimezone(ZoneInfo(settings.timezone)) + PAYMENT_TTL,
     )
     return payment, url
 
 
-async def grant_access(session: AsyncSession, user_id: int, tariff: str, source: str) -> Access:
-    access = await session.get(Access, user_id)
+def grant_access(session: AsyncSession, access: Access | None, user_id: int, tariff: str, source: str) -> Access:
     if access is None:
         access = Access(
             user_id=user_id, tariff=tariff, access_until=settings.final_date,
@@ -77,7 +92,6 @@ async def grant_access(session: AsyncSession, user_id: int, tariff: str, source:
         session.add(access)
     elif TARIFFS[tariff].rank > TARIFFS[access.tariff].rank or source == "manual":
         access.tariff = tariff
-    await session.commit()
     return access
 
 
@@ -93,7 +107,7 @@ async def notify_access_granted(bot: Bot, user: User, access: Access) -> None:
         logger.error("Failed to notify %d about access: %s", user.telegram_id, e)
 
 
-async def _notify_admins(bot: Bot, payment: Payment, user: User, seats_taken: int) -> None:
+async def _notify_admins(bot: Bot, payment: Payment, user: User, seats_taken: int, overpaid: int) -> None:
     text = msg.ADMIN_PAYMENT.format(
         amount=payment.amount,
         tariff=TARIFFS[payment.tariff].title,
@@ -106,6 +120,8 @@ async def _notify_admins(bot: Bot, payment: Payment, user: User, seats_taken: in
         text += msg.ADMIN_PAYMENT_PROMO.format(promo=html.escape(payment.promo_code))
     if payment.tariff == TRANSFORM and seats_taken > settings.transform_seats:
         text += msg.ADMIN_PAYMENT_OVER_LIMIT.format(taken=seats_taken, limit=settings.transform_seats)
+    if overpaid > 0:
+        text += msg.ADMIN_PAYMENT_OVERPAID.format(overpaid=overpaid)
     for admin_id in settings.admin_id_list:
         try:
             await bot.send_message(admin_id, text)
@@ -115,24 +131,23 @@ async def _notify_admins(bot: Bot, payment: Payment, user: User, seats_taken: in
 
 async def complete_payment(bot: Bot, inv_id: int, out_sum: Decimal) -> bool:
     async with AsyncSessionLocal() as session:
-        payment = await session.get(Payment, inv_id)
+        payment = await session.scalar(select(Payment).where(Payment.inv_id == inv_id).with_for_update())
         if payment is None:
             logger.error("Payment %d not found", inv_id)
             return False
         if Decimal(payment.amount) != out_sum:
             logger.error("Payment %d amount mismatch: expected %s, got %s", inv_id, payment.amount, out_sum)
             return False
-
-        result = await session.execute(
-            update(Payment)
-            .where(Payment.inv_id == inv_id, Payment.status != "paid")
-            .values(status="paid", paid_at=datetime.now(timezone.utc))
-        )
-        await session.commit()
-        if result.rowcount == 0:
+        if payment.status == "paid":
             return True
 
-        access = await grant_access(session, payment.user_id, payment.tariff, "payment")
+        access = await session.get(Access, payment.user_id)
+        overpaid = overpayment(payment.kind, payment.tariff, payment.amount, access.tariff if access else None)
+        payment.status = "paid"
+        payment.paid_at = datetime.now(timezone.utc)
+        access = grant_access(session, access, payment.user_id, payment.tariff, "payment")
+        await session.commit()
+
         user = await session.get(User, payment.user_id)
         seats_taken = await session.scalar(
             select(func.count()).select_from(Access).where(Access.tariff == TRANSFORM)
@@ -140,7 +155,7 @@ async def complete_payment(bot: Bot, inv_id: int, out_sum: Decimal) -> bool:
 
     logger.info("Payment %d paid: user=%d tariff=%s amount=%d", inv_id, payment.user_id, payment.tariff, payment.amount)
     await notify_access_granted(bot, user, access)
-    await _notify_admins(bot, payment, user, seats_taken)
+    await _notify_admins(bot, payment, user, seats_taken, overpaid)
     return True
 
 

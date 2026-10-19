@@ -88,7 +88,8 @@ async def cmd_grant(message: Message, command: CommandObject, session: AsyncSess
         session.add(user)
         await session.commit()
 
-    access = await grant_access(session, user_id, tariff, "manual")
+    access = grant_access(session, await session.get(Access, user_id), user_id, tariff, "manual")
+    await session.commit()
     await notify_access_granted(message.bot, user, access)
     await message.answer(msg.ADMIN_GRANT_OK.format(user_id=user_id, tariff=TARIFFS[tariff].title))
 
