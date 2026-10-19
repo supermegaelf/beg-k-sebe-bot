@@ -76,7 +76,7 @@ async def main() -> None:
     await run_missed_checkin_if_needed(bot, storage)
     await run_missed_summary_if_needed(bot)
     await run_missed_final_if_needed(bot, storage)
-    await run_missed_kick_if_needed(bot)
+    kick_task = asyncio.create_task(run_missed_kick_if_needed(bot))
 
     await bot.set_my_commands([
         BotCommand(command="start", description="Перезапустить"),
@@ -87,6 +87,7 @@ async def main() -> None:
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        kick_task.cancel()
         scheduler.shutdown()
         await runner.cleanup()
         await bot.session.close()

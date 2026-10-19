@@ -91,7 +91,7 @@ async def promo_skip(callback: CallbackQuery, state: FSMContext, session: AsyncS
     await show_tariffs(callback.message, state, session, callback.from_user.id, callback.from_user.username)
 
 
-@router.message(PaymentStates.waiting_promo)
+@router.message(PaymentStates.waiting_promo, ~F.text.startswith("/"))
 async def promo_entered(message: Message, state: FSMContext, session: AsyncSession) -> None:
     code = (message.text or "").strip()
     if not settings.promo_code or code.lower() != settings.promo_code.lower():

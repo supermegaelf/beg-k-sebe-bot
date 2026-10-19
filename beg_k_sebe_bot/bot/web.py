@@ -6,7 +6,7 @@ from aiohttp import web
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.services import robokassa
-from beg_k_sebe_bot.bot.services.payments import complete_payment, fail_payment
+from beg_k_sebe_bot.bot.services.payments import complete_payment, notify_payment_failed
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ async def handle_success(_: web.Request) -> web.Response:
 async def handle_fail(request: web.Request) -> web.Response:
     inv_id = (await _params(request)).get("InvId", "")
     if inv_id.isdigit():
-        await fail_payment(request.app[_BOT_KEY], int(inv_id))
+        await notify_payment_failed(request.app[_BOT_KEY], int(inv_id))
     raise web.HTTPFound(settings.fail_page_url or "https://t.me")
 
 

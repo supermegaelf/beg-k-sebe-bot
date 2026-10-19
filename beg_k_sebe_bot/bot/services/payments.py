@@ -1,3 +1,4 @@
+import asyncio
 import html
 import logging
 from datetime import datetime, timedelta, timezone
@@ -6,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 PAYMENT_TTL = timedelta(minutes=30)
 _KIND_LABELS = {"purchase": "покупка", "upgrade": "повышение"}
+_notify_tasks: set[asyncio.Task] = set()
 
 
 def format_date(d) -> str:
@@ -86,7 +88,7 @@ async def get_or_create_payment(
 def grant_access(session: AsyncSession, access: Access | None, user_id: int, tariff: str, source: str) -> Access:
     if access is None:
         access = Access(
-            user_id=user_id, tariff=tariff, access_until=settings.final_date,
+            user_id=user_id, tariff=tariff, access_until=settings.final_date - timedelta(days=1),
             source=source, granted_at=datetime.now(timezone.utc),
         )
         session.add(access)
@@ -154,21 +156,22 @@ async def complete_payment(bot: Bot, inv_id: int, out_sum: Decimal) -> bool:
         )
 
     logger.info("Payment %d paid: user=%d tariff=%s amount=%d", inv_id, payment.user_id, payment.tariff, payment.amount)
-    await notify_access_granted(bot, user, access)
-    await _notify_admins(bot, payment, user, seats_taken, overpaid)
+    task = asyncio.create_task(_notify_paid(bot, payment, user, access, seats_taken, overpaid))
+    _notify_tasks.add(task)
+    task.add_done_callback(_notify_tasks.discard)
     return True
 
 
-async def fail_payment(bot: Bot, inv_id: int) -> None:
+async def _notify_paid(bot: Bot, payment: Payment, user: User, access: Access, seats_taken: int, overpaid: int) -> None:
+    await notify_access_granted(bot, user, access)
+    await _notify_admins(bot, payment, user, seats_taken, overpaid)
+
+
+async def notify_payment_failed(bot: Bot, inv_id: int) -> None:
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            update(Payment)
-            .where(Payment.inv_id == inv_id, Payment.status == "pending")
-            .values(status="failed")
-            .returning(Payment.user_id)
+        user_id = await session.scalar(
+            select(Payment.user_id).where(Payment.inv_id == inv_id, Payment.status == "pending")
         )
-        user_id = result.scalar_one_or_none()
-        await session.commit()
     if user_id is None:
         return
     try:

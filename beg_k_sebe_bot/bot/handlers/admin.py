@@ -1,6 +1,7 @@
 import io
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
@@ -28,7 +29,7 @@ _SOURCE_LABELS = {"payment": "оплата", "manual": "вручную"}
 
 
 def _dt(value: datetime | None) -> str:
-    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if value else ""
+    return value.astimezone(ZoneInfo(settings.timezone)).strftime("%Y-%m-%d %H:%M МСК") if value else ""
 
 
 def _sheet(wb: Workbook, title: str, header: list[str], rows: list[list]) -> None:

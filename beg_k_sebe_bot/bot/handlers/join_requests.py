@@ -24,7 +24,8 @@ async def handle_join_request(request: ChatJoinRequest, session: AsyncSession) -
         return
 
     await request.decline()
+    text = msg.JOIN_DECLINED if access is None else msg.JOIN_DECLINED_PRIVATE
     try:
-        await request.bot.send_message(request.user_chat_id, msg.JOIN_DECLINED)
+        await request.bot.send_message(request.user_chat_id, text)
     except Exception as e:
         logger.warning("Failed to explain declined join to %d: %s", request.from_user.id, e)
