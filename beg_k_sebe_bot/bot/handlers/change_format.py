@@ -7,7 +7,8 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import MovementFormatChange, User
+from beg_k_sebe_bot.bot.database.models import Access, MovementFormatChange, User
+from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.program import current_program_day, today_msk
 
 router = Router()
@@ -30,6 +31,10 @@ def _format_keyboard() -> InlineKeyboardMarkup:
 async def cmd_change_format(message: Message, session: AsyncSession) -> None:
     user = await session.get(User, message.from_user.id)
     if not user or not user.onboarding_completed_at:
+        return
+
+    if await session.get(Access, message.from_user.id) is None:
+        await message.answer(msg.NO_ACCESS)
         return
 
     today = today_msk()

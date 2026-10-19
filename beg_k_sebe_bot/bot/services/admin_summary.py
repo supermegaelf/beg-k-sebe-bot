@@ -11,7 +11,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, SentEvent, User, WeeklyReflection
+from beg_k_sebe_bot.bot.database.models import Access, DailyCheckin, SentEvent, User, WeeklyReflection
+from beg_k_sebe_bot.bot.services.tariffs import TARIFFS
 from beg_k_sebe_bot.bot.utils.program import today_msk
 
 logger = logging.getLogger(__name__)
@@ -52,10 +53,13 @@ _COLUMNS = [
     ("Рефлексия: что на этой неделе оказалось самым сложным?", 40),           # 22 неделя
     ("Рефлексия: насколько ты приблизился(лась) к своей цели за эту неделю?", 40),  # 23 неделя
     ("Рефлексия: чем из этого ты хотел(а) бы поделиться с сообществом?", 40),  # 24 неделя
+    ("Тариф", 18),
+    ("Доступ до", 12),
+    ("Поток", 22),
 ]
 
 # Колонки, объединяемые по вертикали на весь блок участника / на неделю.
-_PERSON_COLS = (1, 2, 3, 4, 5, 6, 7)
+_PERSON_COLS = (1, 2, 3, 4, 5, 6, 7, 25, 26, 27)
 _WEEK_COLS = (8, 10, 11, 12, 20, 21, 22, 23, 24)
 
 
@@ -125,7 +129,9 @@ def _person_weeks(user, checkins, reflections, today) -> list[dict]:
     return weeks
 
 
-def _build_xlsx(users, checkins_by_user, reflections_by_user, today) -> bytes:
+def _build_xlsx(users, checkins_by_user, reflections_by_user, today, access_by_user=None) -> bytes:
+    access_by_user = access_by_user or {}
+    stream = f"{settings.start_date:%d.%m.%Y}–{settings.final_date:%d.%m.%Y}"
     wb = Workbook()
     ws = wb.active
     ws.title = "Участники по неделям"
@@ -153,6 +159,7 @@ def _build_xlsx(users, checkins_by_user, reflections_by_user, today) -> bytes:
         if not weeks:
             continue
         person_first = row
+        access = access_by_user.get(user.telegram_id)
         person_vals = {
             1: str(user.telegram_id),
             2: user.username or "",
@@ -161,6 +168,9 @@ def _build_xlsx(users, checkins_by_user, reflections_by_user, today) -> bytes:
             5: user.point_a_text or "",
             6: user.point_b_score if user.point_b_score is not None else "",
             7: user.point_b_text or "",
+            25: TARIFFS[access.tariff].title if access else "",
+            26: access.access_until.strftime("%d.%m.%Y") if access else "",
+            27: stream,
         }
         for wk in weeks:
             week_first = row
@@ -240,7 +250,12 @@ async def send_admin_summary(bot: Bot, session: AsyncSession) -> None:
     for r in reflections:  # keep every answered week so history accumulates
         reflections_by_user[r.user_id].append(r)
 
-    data = _build_xlsx(users, checkins_by_user, reflections_by_user, today)
+    accesses = (await session.execute(
+        select(Access).where(Access.user_id.in_(user_ids))
+    )).scalars().all()
+    access_by_user = {a.user_id: a for a in accesses}
+
+    data = _build_xlsx(users, checkins_by_user, reflections_by_user, today, access_by_user)
     filename = f"beg_k_sebe_{today.isoformat()}.xlsx"
 
     sent = False

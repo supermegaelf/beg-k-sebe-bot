@@ -1,0 +1,8 @@
+pay.e-makarova.ru {
+	handle /robokassa/* {
+		reverse_proxy app:8080
+	}
+	handle {
+		respond 404
+	}
+}

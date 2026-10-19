@@ -10,11 +10,14 @@ from aiogram.fsm.storage.base import BaseStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select, update
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, SentEvent, User
+from beg_k_sebe_bot.bot.database.models import Access, DailyCheckin, SentEvent, User
+from beg_k_sebe_bot.bot.services.chat_access import remove_from_chats
+from beg_k_sebe_bot.bot.services.payments import check_pending_payments
 from beg_k_sebe_bot.bot.handlers.daily_checkin import checkin_reply_keyboard
 from beg_k_sebe_bot.bot.utils.program import today_msk
 from beg_k_sebe_bot.bot.handlers.final import send_final
@@ -43,7 +46,9 @@ async def _send_reminders(bot: Bot) -> None:
             return
 
         users = (await session.execute(
-            select(User).where(User.onboarding_completed_at.is_not(None))
+            select(User)
+            .join(Access, Access.user_id == User.telegram_id)
+            .where(User.onboarding_completed_at.is_not(None))
         )).scalars().all()
 
         today_checkins = (await session.execute(
@@ -117,7 +122,9 @@ async def _send_admin_summary(bot: Bot) -> None:
 async def _trigger_final(bot: Bot, storage: BaseStorage) -> None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
-            select(User).where(
+            select(User)
+            .join(Access, Access.user_id == User.telegram_id)
+            .where(
                 User.onboarding_completed_at.is_not(None),
                 User.final_sent == False,  # noqa: E712
             )
@@ -130,6 +137,44 @@ async def _trigger_final(bot: Bot, storage: BaseStorage) -> None:
                 await send_final(user.telegram_id, bot, state, session)
             except Exception as e:
                 logger.error("Failed to send final to %d: %s", user.telegram_id, e)
+
+
+async def _kick_unpaid(bot: Bot) -> None:
+    if settings.group_chat_id is None:
+        return
+    marker_key = "kick_unpaid"
+    async with AsyncSessionLocal() as session:
+        if await session.get(SentEvent, marker_key) is not None:
+            return
+        unpaid = (await session.execute(
+            select(User.telegram_id)
+            .outerjoin(Access, Access.user_id == User.telegram_id)
+            .where(Access.user_id.is_(None))
+        )).scalars().all()
+
+    try:
+        chat_admins = {m.user.id for m in await bot.get_chat_administrators(settings.group_chat_id)}
+    except Exception as e:
+        logger.error("Failed to load chat admins, skipping kick: %s", e)
+        return
+    keep = chat_admins | set(settings.admin_id_list)
+
+    kicked = 0
+    for user_id in unpaid:
+        if user_id in keep:
+            continue
+        await remove_from_chats(bot, user_id)
+        kicked += 1
+        await asyncio.sleep(_MSG_INTERVAL)
+
+    async with AsyncSessionLocal() as session:
+        session.add(SentEvent(key=marker_key, sent_at=datetime.now(timezone.utc)))
+        await session.commit()
+    logger.info("Kicked %d unpaid users from chats", kicked)
+
+
+def _kick_datetime() -> datetime:
+    return datetime.combine(settings.kick_unpaid_date, time(12, 0), tzinfo=ZoneInfo(settings.timezone))
 
 
 def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
@@ -169,6 +214,21 @@ def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
         id="admin_summary",
     )
 
+    scheduler.add_job(
+        check_pending_payments,
+        trigger=IntervalTrigger(minutes=5),
+        args=[bot],
+        id="check_pending_payments",
+    )
+
+    if _kick_datetime() > datetime.now(ZoneInfo(settings.timezone)):
+        scheduler.add_job(
+            _kick_unpaid,
+            trigger=DateTrigger(run_date=_kick_datetime()),
+            args=[bot],
+            id="kick_unpaid",
+        )
+
     tz_obj = ZoneInfo(settings.timezone)
     final_dt = datetime.combine(settings.final_date, time(9, 0), tzinfo=tz_obj)
     if final_dt > datetime.now(tz=tz_obj):
@@ -182,6 +242,11 @@ def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
         logger.warning("Final date %s is in the past, scheduling immediate final check on startup", settings.final_date)
 
     return scheduler
+
+
+async def run_missed_kick_if_needed(bot: Bot) -> None:
+    if datetime.now(ZoneInfo(settings.timezone)) >= _kick_datetime():
+        await _kick_unpaid(bot)
 
 
 async def run_missed_final_if_needed(bot: Bot, storage: BaseStorage) -> None:

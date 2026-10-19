@@ -17,10 +17,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
+from beg_k_sebe_bot.bot.database.models import Access, DailyCheckin, User
 from beg_k_sebe_bot.bot.services.stats import current_streak
 from beg_k_sebe_bot.bot.texts import messages as msg
-from beg_k_sebe_bot.bot.utils.access import is_group_member
 from beg_k_sebe_bot.bot.utils.program import today_msk
 from beg_k_sebe_bot.bot.utils.validators import parse_score
 
@@ -122,11 +121,8 @@ async def start_checkin(message: Message, state: FSMContext, session: AsyncSessi
         await message.answer(msg.NEED_ONBOARDING)
         return
 
-    if not await is_group_member(message.bot, message.from_user.id):
-        await message.answer(
-            msg.CHAT_GATE_CHECKIN.format(invite_link=settings.chat_invite_link),
-            disable_web_page_preview=True,
-        )
+    if await session.get(Access, message.from_user.id) is None:
+        await message.answer(msg.NO_ACCESS)
         return
 
     checkin = await _get_today_checkin(message.from_user.id, session, today)
