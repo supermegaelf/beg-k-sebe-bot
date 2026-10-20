@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import Access, Consent, Payment, User
+from beg_k_sebe_bot.bot.database.models import Access, Consent, User
 from beg_k_sebe_bot.bot.services import payments
 from beg_k_sebe_bot.bot.services.chat_access import chat_buttons
 from beg_k_sebe_bot.bot.services.tariffs import (
@@ -110,12 +110,11 @@ def _consent_keyboard(action: str) -> InlineKeyboardMarkup:
 async def _send_payment_link(
     message: Message, session: AsyncSession, user_id: int, tariff: str, kind: str, amount: int, promo: str | None,
 ) -> None:
-    payment, url = await payments.get_or_create_payment(session, user_id, tariff, kind, amount, promo)
+    _, url = await payments.get_or_create_payment(session, user_id, tariff, kind, amount, promo)
     await message.answer(
         msg.PAYMENT_LINK.format(tariff=TARIFFS[tariff].title, price=amount),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=msg.PAYMENT_PAY_BUTTON.format(price=amount), url=url)],
-            [InlineKeyboardButton(text=msg.PAYMENT_CHECK_BUTTON, callback_data=f"pay:check:{payment.inv_id}")],
         ]),
     )
 
@@ -186,22 +185,6 @@ async def handle_consent(callback: CallbackQuery, state: FSMContext, session: As
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=None)
     await _proceed(callback, state, session, callback.data.removeprefix("consent:"))
-
-
-@router.callback_query(F.data.startswith("pay:check:"))
-async def handle_check(callback: CallbackQuery, session: AsyncSession) -> None:
-    inv_id = int(callback.data.rsplit(":", 1)[1])
-    payment = await session.get(Payment, inv_id)
-    if payment is None or payment.user_id != callback.from_user.id:
-        await callback.answer()
-        return
-    if payment.status == "paid":
-        await callback.answer(msg.PAYMENT_ALREADY_PAID, show_alert=True)
-        return
-    if not await payments.check_payment(callback.bot, payment):
-        await callback.answer(msg.PAYMENT_NOT_YET, show_alert=True)
-        return
-    await callback.answer()
 
 
 @router.message(Command("tariff"))
