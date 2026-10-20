@@ -11,7 +11,7 @@ class Tariff:
 
 TARIFFS = {
     "basic": Tariff("basic", "Базовый", 3000, 1),
-    "middle": Tariff("middle", "Средний", 7000, 2),
+    "middle": Tariff("middle", "Средний", 9000, 2),
     "transform": Tariff("transform", "Трансформационный", 22000, 3),
 }
 

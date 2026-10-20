@@ -26,13 +26,6 @@ class PaymentStates(StatesGroup):
     waiting_promo = State()
 
 
-def _price_label(key: str, promo: bool) -> str:
-    price = purchase_price(key, promo)
-    if promo:
-        return msg.TARIFF_PRICE_PROMO.format(full=TARIFFS[key].price, price=price)
-    return msg.TARIFF_PRICE.format(price=price)
-
-
 async def _promo(state: FSMContext) -> str | None:
     return (await state.get_data()).get("promo")
 
@@ -51,10 +44,12 @@ async def show_tariffs(message: Message, state: FSMContext, session: AsyncSessio
     available = await payments.transform_available(session, user_id)
 
     text = msg.TARIFFS.format(
-        basic=_price_label("basic", promo),
-        middle=_price_label("middle", promo),
-        transform=_price_label(TRANSFORM, promo),
-        transform_seats=settings.transform_seats,
+        basic=purchase_price("basic", False),
+        basic_promo=purchase_price("basic", True),
+        middle=purchase_price("middle", False),
+        middle_promo=purchase_price("middle", True),
+        transform=purchase_price(TRANSFORM, False),
+        transform_promo=purchase_price(TRANSFORM, True),
     )
     if promo:
         text += msg.TARIFFS_PROMO_APPLIED

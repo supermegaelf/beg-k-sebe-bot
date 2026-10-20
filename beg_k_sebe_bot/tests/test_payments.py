@@ -75,24 +75,24 @@ def test_parse_op_state_not_found():
 def test_purchase_price_with_promo():
     assert purchase_price("basic", False) == 3000
     assert purchase_price("basic", True) == 2400
-    assert purchase_price("middle", True) == 5600
+    assert purchase_price("middle", True) == 7200
     assert purchase_price("transform", True) == 17600
 
 
 def test_upgrade_price_is_full_price_difference():
-    assert upgrade_price("basic", "middle") == 4000
+    assert upgrade_price("basic", "middle") == 6000
     assert upgrade_price("basic", "transform") == 19000
-    assert upgrade_price("middle", "transform") == 15000
+    assert upgrade_price("middle", "transform") == 13000
     assert upgrade_price("middle", "basic") is None
     assert upgrade_price("transform", "transform") is None
 
 
 def test_overpayment():
     assert overpayment("purchase", "basic", 3000, None) == 0
-    assert overpayment("upgrade", "middle", 4000, "basic") == 0
-    assert overpayment("purchase", "middle", 7000, "basic") == 7000
-    assert overpayment("upgrade", "transform", 19000, "middle") == 4000
-    assert overpayment("upgrade", "middle", 4000, "middle") == 4000
+    assert overpayment("upgrade", "middle", 6000, "basic") == 0
+    assert overpayment("purchase", "middle", 9000, "basic") == 9000
+    assert overpayment("upgrade", "transform", 19000, "middle") == 6000
+    assert overpayment("upgrade", "middle", 6000, "middle") == 6000
 
 
 def test_upgrade_targets():
