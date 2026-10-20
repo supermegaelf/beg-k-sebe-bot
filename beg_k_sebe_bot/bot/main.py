@@ -54,8 +54,8 @@ async def main() -> None:
     dp.update.middleware(DbSessionMiddleware(AsyncSessionLocal))
 
     dp.include_router(admin.router)
-    dp.include_router(onboarding.router)
     dp.include_router(payment.router)
+    dp.include_router(onboarding.router)
     dp.include_router(join_requests.router)
     dp.include_router(daily_checkin.router)
     dp.include_router(progress.router)

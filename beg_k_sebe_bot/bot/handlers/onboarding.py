@@ -69,8 +69,9 @@ async def handle_onboarding_start(callback: CallbackQuery, state: FSMContext, se
     user = await session.get(User, callback.from_user.id)
     if await session.get(Access, callback.from_user.id) is None or (user and user.onboarding_completed_at):
         return
+    rows = [row for row in callback.message.reply_markup.inline_keyboard if row[0].callback_data != "onb:start"]
     with suppress(TelegramBadRequest):
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await _begin_onboarding(callback.from_user.id, callback.from_user.username, callback.message, state, session)
 
 
