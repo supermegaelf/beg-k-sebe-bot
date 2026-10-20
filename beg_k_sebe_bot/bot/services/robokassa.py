@@ -56,12 +56,8 @@ def payment_url(
     return f"{PAYMENT_URL}?{urlencode(params)}"
 
 
-def result_signature(out_sum: str, inv_id: str, password2: str) -> str:
-    return _md5(f"{out_sum}:{inv_id}:{password2}")
-
-
-def verify_result(out_sum: str, inv_id: str, signature: str, password2: str) -> bool:
-    return result_signature(out_sum, inv_id, password2) == signature.lower()
+def verify_signature(out_sum: str, inv_id: str, signature: str, password: str) -> bool:
+    return _md5(f"{out_sum}:{inv_id}:{password}") == signature.lower()
 
 
 def parse_op_state(xml_text: str) -> tuple[int | None, int | None]:

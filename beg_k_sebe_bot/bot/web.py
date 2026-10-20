@@ -6,7 +6,7 @@ from aiohttp import web
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.services import robokassa
-from beg_k_sebe_bot.bot.services.payments import complete_payment, notify_payment_failed
+from beg_k_sebe_bot.bot.services.payments import complete_payment, notify_payment_failed, notify_payment_pending
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ async def handle_result(request: web.Request) -> web.Response:
     out_sum, inv_id, signature = params.get("OutSum"), params.get("InvId"), params.get("SignatureValue")
     if not out_sum or not inv_id or not signature or not inv_id.isdigit():
         return web.Response(status=400, text="bad request")
-    if not robokassa.verify_result(out_sum, inv_id, signature, settings.robokassa_password2):
+    if not robokassa.verify_signature(out_sum, inv_id, signature, settings.robokassa_password2):
         logger.warning("ResultURL: bad signature for InvId=%s", inv_id)
         return web.Response(status=400, text="bad sign")
     try:
@@ -38,7 +38,11 @@ async def handle_result(request: web.Request) -> web.Response:
     return web.Response(text=f"OK{inv_id}")
 
 
-async def handle_success(_: web.Request) -> web.Response:
+async def handle_success(request: web.Request) -> web.Response:
+    params = await _params(request)
+    out_sum, inv_id, signature = params.get("OutSum", ""), params.get("InvId", ""), params.get("SignatureValue", "")
+    if inv_id.isdigit() and robokassa.verify_signature(out_sum, inv_id, signature, settings.robokassa_password1):
+        await notify_payment_pending(request.app[_BOT_KEY], int(inv_id))
     raise web.HTTPFound(settings.success_page_url or "https://t.me")
 
 

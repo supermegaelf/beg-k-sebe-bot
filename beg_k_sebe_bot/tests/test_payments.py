@@ -49,11 +49,11 @@ def test_payment_url_without_test_flag():
     assert "IsTest" not in parse_qs(urlparse(url).query)
 
 
-def test_verify_result_uses_received_sum_and_password2():
+def test_verify_signature_uses_received_sum_and_password():
     sig = _md5("3000.000000:7:p2").upper()
-    assert robokassa.verify_result("3000.000000", "7", sig, "p2")
-    assert not robokassa.verify_result("3000.000000", "7", sig, "p1")
-    assert not robokassa.verify_result("2400.000000", "7", sig, "p2")
+    assert robokassa.verify_signature("3000.000000", "7", sig, "p2")
+    assert not robokassa.verify_signature("3000.000000", "7", sig, "p1")
+    assert not robokassa.verify_signature("2400.000000", "7", sig, "p2")
 
 
 def test_parse_op_state():

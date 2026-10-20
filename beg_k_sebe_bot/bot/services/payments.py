@@ -167,7 +167,7 @@ async def _notify_paid(bot: Bot, payment: Payment, user: User, access: Access, s
     await _notify_admins(bot, payment, user, seats_taken, overpaid)
 
 
-async def notify_payment_failed(bot: Bot, inv_id: int) -> None:
+async def _notify_if_pending(bot: Bot, inv_id: int, text: str) -> None:
     async with AsyncSessionLocal() as session:
         user_id = await session.scalar(
             select(Payment.user_id).where(Payment.inv_id == inv_id, Payment.status == "pending")
@@ -175,9 +175,17 @@ async def notify_payment_failed(bot: Bot, inv_id: int) -> None:
     if user_id is None:
         return
     try:
-        await bot.send_message(user_id, msg.PAYMENT_FAILED)
+        await bot.send_message(user_id, text)
     except Exception as e:
-        logger.error("Failed to notify %d about failed payment: %s", user_id, e)
+        logger.error("Failed to notify %d about payment %d: %s", user_id, inv_id, e)
+
+
+async def notify_payment_failed(bot: Bot, inv_id: int) -> None:
+    await _notify_if_pending(bot, inv_id, msg.PAYMENT_FAILED)
+
+
+async def notify_payment_pending(bot: Bot, inv_id: int) -> None:
+    await _notify_if_pending(bot, inv_id, msg.PAYMENT_RECEIVED)
 
 
 async def check_payment(bot: Bot, payment: Payment) -> bool:
