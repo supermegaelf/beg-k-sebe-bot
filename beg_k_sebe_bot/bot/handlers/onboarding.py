@@ -8,12 +8,10 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import User, MovementFormatChange
+from beg_k_sebe_bot.bot.database.models import Access, User, MovementFormatChange
 from beg_k_sebe_bot.bot.handlers.daily_checkin import checkin_reply_keyboard
+from beg_k_sebe_bot.bot.handlers.payment import show_tariffs
 from beg_k_sebe_bot.bot.texts import messages as msg
-from beg_k_sebe_bot.bot.utils.access import is_group_member
-from beg_k_sebe_bot.bot.utils.program import today_msk
 from beg_k_sebe_bot.bot.utils.validators import parse_score
 
 router = Router()
@@ -34,16 +32,13 @@ def _format_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def _check_access_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="Проверить доступ", callback_data="chat:check"),
-    ]])
-
-
 async def _begin_onboarding(user_id: int, username: str | None, chat: Message, state: FSMContext, session: AsyncSession) -> None:
     existing = await session.get(User, user_id)
     if not existing:
         session.add(User(telegram_id=user_id, username=username, joined_at=datetime.now(timezone.utc)))
+        await session.commit()
+    elif existing.joined_at is None:
+        existing.joined_at = datetime.now(timezone.utc)
         await session.commit()
 
     await chat.answer(msg.GREETING)
@@ -53,51 +48,30 @@ async def _begin_onboarding(user_id: int, username: str | None, chat: Message, s
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext, session: AsyncSession) -> None:
-    today = today_msk()
-
     existing = await session.get(User, message.from_user.id)
+    access = await session.get(Access, message.from_user.id)
+
+    if access is None:
+        await show_tariffs(message, state, session, message.from_user.id, message.from_user.username)
+        return
+
     if existing and existing.onboarding_completed_at:
         await state.clear()
         await message.answer(msg.RESTART, reply_markup=checkin_reply_keyboard())
         return
 
-    if today > settings.registration_deadline and not existing:
-        await message.answer(msg.REGISTRATION_CLOSED)
-        return
-
-    if not await is_group_member(message.bot, message.from_user.id):
-        await message.answer(
-            msg.CHAT_GATE.format(invite_link=settings.chat_invite_link),
-            reply_markup=_check_access_keyboard(),
-            disable_web_page_preview=True,
-        )
-        return
-
     await _begin_onboarding(message.from_user.id, message.from_user.username, message, state, session)
 
 
-@router.callback_query(F.data == "chat:check")
-async def handle_chat_check(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
-    today = today_msk()
-    existing = await session.get(User, callback.from_user.id)
-
-    if existing and existing.onboarding_completed_at:
-        await callback.answer()
-        return
-
-    if today > settings.registration_deadline and not existing:
-        await callback.message.answer(msg.REGISTRATION_CLOSED)
-        await callback.answer()
-        return
-
-    if not await is_group_member(callback.bot, callback.from_user.id):
-        await callback.answer()
-        await callback.message.answer(msg.CHAT_GATE_STILL_OUT)
-        return
-
-    with suppress(TelegramBadRequest):
-        await callback.message.edit_reply_markup(reply_markup=None)
+@router.callback_query(F.data == "onb:start")
+async def handle_onboarding_start(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     await callback.answer()
+    user = await session.get(User, callback.from_user.id)
+    if await session.get(Access, callback.from_user.id) is None or (user and user.onboarding_completed_at):
+        return
+    rows = [row for row in callback.message.reply_markup.inline_keyboard if row[0].callback_data != "onb:start"]
+    with suppress(TelegramBadRequest):
+        await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
     await _begin_onboarding(callback.from_user.id, callback.from_user.username, callback.message, state, session)
 
 

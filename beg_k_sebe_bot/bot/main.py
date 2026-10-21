@@ -8,19 +8,22 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.state import default_state
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.types import BotCommand, CallbackQuery, Message
+from aiohttp import web
 
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.db import AsyncSessionLocal, create_tables
 from beg_k_sebe_bot.bot.handlers import (
-    onboarding, daily_checkin, change_format, final, progress, weekly_reflection,
+    admin, onboarding, payment, join_requests, daily_checkin, change_format, final, progress, weekly_reflection,
 )
 from beg_k_sebe_bot.bot.middleware import DbSessionMiddleware
 from beg_k_sebe_bot.bot.services.scheduler import (
     build_scheduler,
     run_missed_checkin_if_needed,
     run_missed_final_if_needed,
+    run_missed_kick_if_needed,
     run_missed_summary_if_needed,
 )
+from beg_k_sebe_bot.bot.web import build_app
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -50,7 +53,10 @@ async def main() -> None:
 
     dp.update.middleware(DbSessionMiddleware(AsyncSessionLocal))
 
+    dp.include_router(admin.router)
+    dp.include_router(payment.router)
     dp.include_router(onboarding.router)
+    dp.include_router(join_requests.router)
     dp.include_router(daily_checkin.router)
     dp.include_router(progress.router)
     dp.include_router(weekly_reflection.router)
@@ -62,19 +68,28 @@ async def main() -> None:
     scheduler.start()
     logger.info("Scheduler started with %d jobs", len(scheduler.get_jobs()))
 
+    runner = web.AppRunner(build_app(bot))
+    await runner.setup()
+    await web.TCPSite(runner, "0.0.0.0", settings.web_port).start()
+    logger.info("Payment webhook server listening on port %d", settings.web_port)
+
     await run_missed_checkin_if_needed(bot, storage)
     await run_missed_summary_if_needed(bot)
     await run_missed_final_if_needed(bot, storage)
+    kick_task = asyncio.create_task(run_missed_kick_if_needed(bot))
 
     await bot.set_my_commands([
         BotCommand(command="start", description="Перезапустить"),
+        BotCommand(command="tariff", description="Мой тариф и повышение"),
         BotCommand(command="change_format", description="Сменить формат движения"),
     ])
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        kick_task.cancel()
         scheduler.shutdown()
+        await runner.cleanup()
         await bot.session.close()
 
 

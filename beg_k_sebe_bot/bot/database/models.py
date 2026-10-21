@@ -92,3 +92,34 @@ class SentEvent(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Access(Base):
+    __tablename__ = "accesses"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id"), primary_key=True)
+    tariff: Mapped[str] = mapped_column(String(20))
+    access_until: Mapped[date] = mapped_column(Date)
+    source: Mapped[str] = mapped_column(String(10))
+    granted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class Payment(Base):
+    __tablename__ = "payments"
+
+    inv_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id"))
+    tariff: Mapped[str] = mapped_column(String(20))
+    kind: Mapped[str] = mapped_column(String(10))
+    amount: Mapped[int] = mapped_column(Integer)
+    promo_code: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(10), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class Consent(Base):
+    __tablename__ = "consents"
+
+    user_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("users.telegram_id"), primary_key=True)
+    accepted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import SentEvent, User, WeeklyReflection
+from beg_k_sebe_bot.bot.database.models import Access, SentEvent, User, WeeklyReflection
 from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.program import today_msk
 
@@ -68,7 +68,9 @@ async def send_reflection_prompts(bot: Bot, session: AsyncSession) -> None:
         return
 
     users = (await session.execute(
-        select(User).where(User.onboarding_completed_at.is_not(None))
+        select(User)
+        .join(Access, Access.user_id == User.telegram_id)
+        .where(User.onboarding_completed_at.is_not(None))
     )).scalars().all()
 
     sent = 0
@@ -93,6 +95,11 @@ async def start_reflection(callback: CallbackQuery, state: FSMContext, session: 
     if user is None or user.onboarding_completed_at is None:
         await callback.answer()
         await callback.message.answer(msg.NEED_ONBOARDING)
+        return
+
+    if await session.get(Access, callback.from_user.id) is None:
+        await callback.answer()
+        await callback.message.answer(msg.NO_ACCESS)
         return
 
     reflection = await _get_reflection(callback.from_user.id, week, session)

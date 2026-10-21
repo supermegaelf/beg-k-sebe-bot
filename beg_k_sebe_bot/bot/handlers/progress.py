@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.config import settings
-from beg_k_sebe_bot.bot.database.models import DailyCheckin, User
+from beg_k_sebe_bot.bot.database.models import Access, DailyCheckin, User
 from beg_k_sebe_bot.bot.services import stats
 from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.program import today_msk
@@ -19,6 +19,10 @@ _PROGRAM_DAYS = settings.final_program_day - 1  # check-in days (1..30)
 async def show_progress(message: Message, session: AsyncSession) -> None:
     user = await session.get(User, message.from_user.id)
     if user is None or user.onboarding_completed_at is None:
+        return
+
+    if await session.get(Access, message.from_user.id) is None:
+        await message.answer(msg.NO_ACCESS)
         return
 
     checkins = (await session.execute(

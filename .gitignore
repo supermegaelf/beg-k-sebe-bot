@@ -7,4 +7,5 @@ venv/
 *.egg-info/
 .pytest_cache/
 beg_k_sebe_spec.md
+backups/
 CLAUDE.md

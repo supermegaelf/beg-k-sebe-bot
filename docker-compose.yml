@@ -25,6 +25,19 @@ services:
       retries: 10
       start_period: 30s
 
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: beg-k-sebe-postgres-test
+    profiles: ["test"]
+    environment:
+      - POSTGRES_USER=test
+      - POSTGRES_PASSWORD=test
+      - POSTGRES_DB=beg_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5434:5432"
+
   app:
     build:
       context: .
@@ -39,5 +52,37 @@ services:
       redis:
         condition: service_started
 
+  caddy:
+    image: caddy:2-alpine
+    container_name: beg-k-sebe-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - app
+
+  backup:
+    image: postgres:16-alpine
+    container_name: beg-k-sebe-backup
+    restart: unless-stopped
+    environment:
+      - PGPASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: >
+      sh -c 'set -o pipefail; while true; do
+      f=/backups/beg_k_sebe_$$(date +%F).sql.gz;
+      if ! pg_dump -h postgres -U ${POSTGRES_USER} ${POSTGRES_DB} | gzip > $$f; then rm -f $$f; echo "Backup failed" >&2; fi;
+      find /backups -name "*.sql.gz" -mtime +14 -delete;
+      sleep 86400; done'
+
 volumes:
   postgres_data:
+  caddy_data:
