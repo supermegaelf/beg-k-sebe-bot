@@ -48,13 +48,14 @@ async def show_tariffs(message: Message, state: FSMContext, session: AsyncSessio
         basic_promo=purchase_price("basic", True),
         middle=purchase_price("middle", False),
         middle_promo=purchase_price("middle", True),
-        transform=purchase_price(TRANSFORM, False),
-        transform_promo=purchase_price(TRANSFORM, True),
     )
+    if available:
+        text += msg.TARIFFS_TRANSFORM.format(
+            transform=purchase_price(TRANSFORM, False),
+            transform_promo=purchase_price(TRANSFORM, True),
+        )
     if promo:
         text += msg.TARIFFS_PROMO_APPLIED
-    if not available:
-        text += msg.TRANSFORM_SOLD_OUT
 
     rows = [
         [InlineKeyboardButton(
@@ -105,9 +106,13 @@ def _consent_keyboard(action: str) -> InlineKeyboardMarkup:
 async def _send_payment_link(
     message: Message, session: AsyncSession, user_id: int, tariff: str, kind: str, amount: int, promo: str | None,
 ) -> None:
-    _, url = await payments.get_or_create_payment(session, user_id, tariff, kind, amount, promo)
+    payment, url = await payments.get_or_create_payment(session, user_id, tariff, kind, amount, promo)
     await message.answer(
-        msg.PAYMENT_LINK.format(tariff=TARIFFS[tariff].title, price=amount),
+        msg.PAYMENT_LINK.format(
+            tariff=TARIFFS[tariff].title,
+            price=amount,
+            expires=payments.payment_expires_at(payment).strftime("%H:%M"),
+        ),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=msg.PAYMENT_PAY_BUTTON.format(price=amount), url=url)],
         ]),
@@ -145,7 +150,7 @@ async def _proceed(callback: CallbackQuery, state: FSMContext, session: AsyncSes
         payment_kind = "upgrade"
 
     if tariff == TRANSFORM and not await payments.transform_available(session, user_id):
-        await callback.message.answer(msg.TRANSFORM_SOLD_OUT.strip())
+        await callback.message.answer(msg.TRANSFORM_SOLD_OUT)
         return
 
     if await session.get(Consent, user_id) is None:
@@ -159,14 +164,8 @@ async def _proceed(callback: CallbackQuery, state: FSMContext, session: AsyncSes
     await _send_payment_link(callback.message, session, user_id, tariff, payment_kind, amount, promo)
 
 
-@router.callback_query(F.data.startswith("buy:"))
-async def handle_buy(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
-    await callback.answer()
-    await _proceed(callback, state, session, callback.data)
-
-
-@router.callback_query(F.data.startswith("upgrade:"))
-async def handle_upgrade(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
+@router.callback_query(F.data.startswith("buy:") | F.data.startswith("upgrade:"))
+async def handle_tariff_choice(callback: CallbackQuery, state: FSMContext, session: AsyncSession) -> None:
     await callback.answer()
     await _proceed(callback, state, session, callback.data)
 

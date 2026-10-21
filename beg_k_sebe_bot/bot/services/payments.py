@@ -21,12 +21,16 @@ from beg_k_sebe_bot.bot.texts import messages as msg
 logger = logging.getLogger(__name__)
 
 PAYMENT_TTL = timedelta(minutes=30)
-_KIND_LABELS = {"purchase": "покупка", "upgrade": "повышение"}
+KIND_LABELS = {"purchase": "покупка", "upgrade": "повышение"}
 _notify_tasks: set[asyncio.Task] = set()
 
 
 def format_date(d) -> str:
     return d.strftime("%d.%m.%Y")
+
+
+def payment_expires_at(payment: Payment) -> datetime:
+    return payment.created_at.astimezone(ZoneInfo(settings.timezone)) + PAYMENT_TTL
 
 
 def _open_payment_filter():
@@ -80,7 +84,7 @@ async def get_or_create_payment(
         description=f"Бег к себе - тариф {title}",
         receipt_item=f"Участие в потоке Бег к себе, тариф {title}",
         is_test=settings.robokassa_is_test,
-        expiration=payment.created_at.astimezone(ZoneInfo(settings.timezone)) + PAYMENT_TTL,
+        expiration=payment_expires_at(payment),
     )
     return payment, url
 
@@ -92,7 +96,11 @@ def grant_access(session: AsyncSession, access: Access | None, user_id: int, tar
             source=source, granted_at=datetime.now(timezone.utc),
         )
         session.add(access)
-    elif TARIFFS[tariff].rank > TARIFFS[access.tariff].rank or source == "manual":
+    elif source == "manual":
+        access.tariff = tariff
+        access.source = source
+        access.granted_at = datetime.now(timezone.utc)
+    elif TARIFFS[tariff].rank > TARIFFS[access.tariff].rank:
         access.tariff = tariff
     return access
 
@@ -109,11 +117,13 @@ async def notify_access_granted(bot: Bot, user: User, access: Access) -> None:
         logger.error("Failed to notify %d about access: %s", user.telegram_id, e)
 
 
-async def _notify_admins(bot: Bot, payment: Payment, user: User, seats_taken: int, overpaid: int) -> None:
+async def _notify_admins(
+    bot: Bot, payment: Payment, user: User, seats_taken: int, overpaid: int, upgraded_without_access: bool,
+) -> None:
     text = msg.ADMIN_PAYMENT.format(
         amount=payment.amount,
         tariff=TARIFFS[payment.tariff].title,
-        kind=_KIND_LABELS[payment.kind],
+        kind=KIND_LABELS[payment.kind],
         user=html.escape(f"@{user.username}" if user.username else "без юзернейма"),
         user_id=user.telegram_id,
         inv_id=payment.inv_id,
@@ -124,6 +134,8 @@ async def _notify_admins(bot: Bot, payment: Payment, user: User, seats_taken: in
         text += msg.ADMIN_PAYMENT_OVER_LIMIT.format(taken=seats_taken, limit=settings.transform_seats)
     if overpaid > 0:
         text += msg.ADMIN_PAYMENT_OVERPAID.format(overpaid=overpaid)
+    if upgraded_without_access:
+        text += msg.ADMIN_PAYMENT_UPGRADE_NO_ACCESS
     for admin_id in settings.admin_id_list:
         try:
             await bot.send_message(admin_id, text)
@@ -144,7 +156,8 @@ async def complete_payment(bot: Bot, inv_id: int, out_sum: Decimal) -> bool:
             return True
 
         access = await session.get(Access, payment.user_id)
-        overpaid = overpayment(payment.kind, payment.tariff, payment.amount, access.tariff if access else None)
+        overpaid = overpayment(payment.tariff, payment.amount, access.tariff if access else None)
+        upgraded_without_access = payment.kind == "upgrade" and access is None
         payment.status = "paid"
         payment.paid_at = datetime.now(timezone.utc)
         access = grant_access(session, access, payment.user_id, payment.tariff, "payment")
@@ -156,15 +169,20 @@ async def complete_payment(bot: Bot, inv_id: int, out_sum: Decimal) -> bool:
         )
 
     logger.info("Payment %d paid: user=%d tariff=%s amount=%d", inv_id, payment.user_id, payment.tariff, payment.amount)
-    task = asyncio.create_task(_notify_paid(bot, payment, user, access, seats_taken, overpaid))
+    task = asyncio.create_task(_notify_paid(
+        bot, payment, user, access, seats_taken, overpaid, upgraded_without_access,
+    ))
     _notify_tasks.add(task)
     task.add_done_callback(_notify_tasks.discard)
     return True
 
 
-async def _notify_paid(bot: Bot, payment: Payment, user: User, access: Access, seats_taken: int, overpaid: int) -> None:
+async def _notify_paid(
+    bot: Bot, payment: Payment, user: User, access: Access, seats_taken: int, overpaid: int,
+    upgraded_without_access: bool,
+) -> None:
     await notify_access_granted(bot, user, access)
-    await _notify_admins(bot, payment, user, seats_taken, overpaid)
+    await _notify_admins(bot, payment, user, seats_taken, overpaid, upgraded_without_access)
 
 
 async def _notify_if_pending(bot: Bot, inv_id: int, text: str) -> None:
@@ -206,7 +224,7 @@ async def check_pending_payments(bot: Bot) -> None:
     async with AsyncSessionLocal() as session:
         pending = (await session.execute(
             select(Payment).where(
-                Payment.status != "paid",
+                Payment.status == "pending",
                 Payment.created_at > now - timedelta(hours=2),
                 Payment.created_at < now - timedelta(minutes=2),
             )

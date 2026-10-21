@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from beg_k_sebe_bot.bot.config import settings
 from beg_k_sebe_bot.bot.database.models import Access, Payment, User
 from beg_k_sebe_bot.bot.services.chat_access import remove_from_chats
-from beg_k_sebe_bot.bot.services.payments import grant_access, notify_access_granted
+from beg_k_sebe_bot.bot.services.payments import KIND_LABELS, grant_access, notify_access_granted
 from beg_k_sebe_bot.bot.services.tariffs import TARIFFS
 from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.program import today_msk
@@ -23,8 +23,7 @@ logger = logging.getLogger(__name__)
 router = Router()
 router.message.filter(F.from_user.id.in_(settings.admin_id_list))
 
-_STATUS_LABELS = {"pending": "ожидает", "paid": "оплачен", "failed": "не прошёл"}
-_KIND_LABELS = {"purchase": "покупка", "upgrade": "повышение"}
+_STATUS_LABELS = {"pending": "ожидает", "paid": "оплачен"}
 _SOURCE_LABELS = {"payment": "оплата", "manual": "вручную"}
 
 
@@ -62,7 +61,7 @@ async def cmd_payments(message: Message, session: AsyncSession) -> None:
         for a in accesses
     ])
     _sheet(wb, "Платежи", ["Счёт", "Telegram ID", "Юзернейм", "Тариф", "Тип", "Сумма, ₽", "Промокод", "Статус", "Создан", "Оплачен"], [
-        [p.inv_id, str(p.user_id), username(p.user_id), TARIFFS[p.tariff].title, _KIND_LABELS.get(p.kind, p.kind),
+        [p.inv_id, str(p.user_id), username(p.user_id), TARIFFS[p.tariff].title, KIND_LABELS.get(p.kind, p.kind),
          p.amount, p.promo_code or "", _STATUS_LABELS.get(p.status, p.status), _dt(p.created_at), _dt(p.paid_at)]
         for p in payments
     ])

@@ -88,11 +88,12 @@ def test_upgrade_price_is_full_price_difference():
 
 
 def test_overpayment():
-    assert overpayment("purchase", "basic", 3000, None) == 0
-    assert overpayment("upgrade", "middle", 6000, "basic") == 0
-    assert overpayment("purchase", "middle", 9000, "basic") == 9000
-    assert overpayment("upgrade", "transform", 19000, "middle") == 6000
-    assert overpayment("upgrade", "middle", 6000, "middle") == 6000
+    assert overpayment("basic", 3000, None) == 0
+    assert overpayment("middle", 6000, "basic") == 0
+    assert overpayment("middle", 9000, "basic") == 3000
+    assert overpayment("transform", 19000, "middle") == 6000
+    assert overpayment("middle", 6000, "middle") == 6000
+    assert overpayment("basic", 3000, "middle") == 3000
 
 
 def test_upgrade_targets():

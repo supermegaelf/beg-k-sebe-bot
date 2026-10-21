@@ -64,8 +64,9 @@ services:
       postgres:
         condition: service_healthy
     entrypoint: >
-      sh -c 'while true; do
-      pg_dump -h postgres -U ${POSTGRES_USER} ${POSTGRES_DB} | gzip > /backups/beg_k_sebe_$$(date +%F).sql.gz;
+      sh -c 'set -o pipefail; while true; do
+      f=/backups/beg_k_sebe_$$(date +%F).sql.gz;
+      if ! pg_dump -h postgres -U ${POSTGRES_USER} ${POSTGRES_DB} | gzip > $$f; then rm -f $$f; echo "Backup failed" >&2; fi;
       find /backups -name "*.sql.gz" -mtime +14 -delete;
       sleep 86400; done'
 

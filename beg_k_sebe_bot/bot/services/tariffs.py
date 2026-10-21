@@ -12,7 +12,7 @@ class Tariff:
 TARIFFS = {
     "basic": Tariff("basic", "Базовый", 3000, 1),
     "middle": Tariff("middle", "Средний", 9000, 2),
-    "transform": Tariff("transform", "Трансформационный", 22000, 3),
+    "transform": Tariff("transform", "Трансформация", 22000, 3),
 }
 
 TRANSFORM = "transform"
@@ -30,11 +30,10 @@ def upgrade_price(current: str, target: str) -> int | None:
     return TARIFFS[target].price - TARIFFS[current].price
 
 
-def overpayment(kind: str, tariff: str, amount: int, current: str | None) -> int:
+def overpayment(tariff: str, amount: int, current: str | None) -> int:
     if current is None:
         return 0
-    due = upgrade_price(current, tariff) if kind == "upgrade" else None
-    return amount - (due or 0)
+    return amount - (upgrade_price(current, tariff) or 0)
 
 
 def upgrade_targets(current: str) -> list[Tariff]:
