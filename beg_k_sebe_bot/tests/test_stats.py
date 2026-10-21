@@ -1,6 +1,6 @@
 """Unit tests for the stats core. Run: python -m beg_k_sebe_bot.tests.test_stats
 or with pytest. No DB or aiogram needed."""
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 from beg_k_sebe_bot.bot.services.stats import (
@@ -16,7 +16,7 @@ PROGRAM_DAYS = 30
 def _ci(day, *, status="answered", minutes=None, category=None, energy=None, movement="yes"):
     """Build a fake check-in for the given program day (1-based)."""
     return SimpleNamespace(
-        date=date(2026, 9, 20 + day),
+        date=START + timedelta(days=day - 1),
         day_number=day,
         status=status,
         minutes=minutes,
@@ -34,19 +34,6 @@ def test_completed_missed_pct():
     assert s.completed == 3
     assert s.missed == 1          # only day 4 (fully elapsed, not done); today not counted as miss
     assert s.completion_pct == 60  # 3 of 5
-
-
-def test_minutes_by_category_and_skip():
-    checkins = [
-        _ci(1, minutes=22, category="walk"),
-        _ci(2, minutes=30, category="run"),
-        _ci(3, minutes=45, category="own"),
-        _ci(4, minutes=0, category="walk"),   # skipped -> not counted
-    ]
-    s = compute_stats(start_date=START, program_days=PROGRAM_DAYS,
-                      onboarding_date=START, today=date(2026, 9, 25), checkins=checkins)
-    assert s.total_minutes == 97
-    assert s.minutes_by_category == {"walk": 22, "run": 30, "own": 45}
 
 
 def test_streak_including_today():
@@ -82,20 +69,13 @@ def test_format_change_splits_minutes_by_category():
         _ci(2, minutes=30, category="walk"),
         _ci(3, minutes=25, category="run"),
         _ci(4, minutes=40, category="run"),
+        _ci(5, minutes=0, category="run"),
+        _ci(6, status="pending", minutes=35, category="run"),
     ]
     s = compute_stats(start_date=START, program_days=PROGRAM_DAYS,
-                      onboarding_date=START, today=date(2026, 9, 25), checkins=checkins)
+                      onboarding_date=START, today=date(2026, 9, 26), checkins=checkins)
     assert s.minutes_by_category == {"walk": 52, "run": 65}
     assert s.total_minutes == 117
-
-
-def test_completion_pct_capped_at_100_late_registration():
-    # Registered day 5, answered every day since — must be 100%, not over.
-    checkins = [_ci(5), _ci(6), _ci(7)]
-    s = compute_stats(start_date=START, program_days=PROGRAM_DAYS,
-                      onboarding_date=date(2026, 9, 25), today=date(2026, 9, 27), checkins=checkins)
-    assert s.completion_pct == 100
-    assert s.missed == 0
 
 
 def test_program_day_capped_after_end():

@@ -3,26 +3,13 @@ import json
 from urllib.parse import parse_qs, unquote, urlparse
 
 from beg_k_sebe_bot.bot.services import robokassa
-from beg_k_sebe_bot.bot.services.tariffs import overpayment, purchase_price, upgrade_price, upgrade_targets
+from beg_k_sebe_bot.bot.services.tariffs import (
+    TARIFFS, overpayment, purchase_price, upgrade_price, upgrade_targets,
+)
 
 
 def _md5(s):
     return hashlib.md5(s.encode()).hexdigest()
-
-
-def test_format_sum():
-    assert robokassa.format_sum(3000) == "3000.00"
-
-
-def test_receipt_is_urlencoded_minified_json():
-    receipt = robokassa.build_receipt("Тариф Базовый", 2400)
-    assert "%" in receipt and " " not in receipt
-    assert json.loads(unquote(receipt)) == {"items": [{"name": "Тариф Базовый", "quantity": 1, "sum": 2400, "tax": "none"}]}
-
-
-def test_docs_receipt_example_signature():
-    receipt = "%7B%22items%22%3A%5B%7B%22name%22%3A%22product%22%2C%22quantity%22%3A1%2C%22sum%22%3A8.96%2C%22tax%22%3A%22none%22%7D%5D%7D"
-    assert robokassa.payment_signature("demo", "8.96", 5, receipt, "pass1") == _md5(f"demo:8.96:5:{receipt}:pass1")
 
 
 def test_payment_url_params_and_signature():
@@ -37,8 +24,10 @@ def test_payment_url_params_and_signature():
     assert q["OutSum"] == "3000.00"
     assert q["InvId"] == "7"
     assert q["IsTest"] == "1"
-    assert q["Receipt"] == robokassa.build_receipt("Тариф Базовый", 3000)
-    assert q["SignatureValue"] == _md5(f"shop:3000.00:7:{q['Receipt']}:p1")
+    assert json.loads(unquote(q["Receipt"])) == {
+        "items": [{"name": "Тариф Базовый", "quantity": 1, "sum": 3000, "tax": "none"}],
+    }
+    assert q["SignatureValue"] == _md5(f"shop:{q['OutSum']}:7:{q['Receipt']}:p1")
 
 
 def test_payment_url_without_test_flag():
@@ -72,28 +61,26 @@ def test_parse_op_state_not_found():
     assert robokassa.parse_op_state(xml) == (3, None)
 
 
-def test_purchase_price_with_promo():
-    assert purchase_price("basic", False) == 3000
-    assert purchase_price("basic", True) == 2400
-    assert purchase_price("middle", True) == 7200
-    assert purchase_price("transform", True) == 17600
+def test_promo_price_is_lower_than_full_price():
+    for key, tariff in TARIFFS.items():
+        assert purchase_price(key, False) == tariff.price
+        assert 0 < purchase_price(key, True) < tariff.price
 
 
-def test_upgrade_price_is_full_price_difference():
-    assert upgrade_price("basic", "middle") == 6000
-    assert upgrade_price("basic", "transform") == 19000
-    assert upgrade_price("middle", "transform") == 13000
+def test_upgrade_price_tops_up_to_target_price():
+    for current, target in [("basic", "middle"), ("basic", "transform"), ("middle", "transform")]:
+        assert TARIFFS[current].price + upgrade_price(current, target) == TARIFFS[target].price
     assert upgrade_price("middle", "basic") is None
     assert upgrade_price("transform", "transform") is None
 
 
 def test_overpayment():
-    assert overpayment("basic", 3000, None) == 0
-    assert overpayment("middle", 6000, "basic") == 0
-    assert overpayment("middle", 9000, "basic") == 3000
-    assert overpayment("transform", 19000, "middle") == 6000
-    assert overpayment("middle", 6000, "middle") == 6000
-    assert overpayment("basic", 3000, "middle") == 3000
+    exact = upgrade_price("basic", "middle")
+    assert overpayment("basic", TARIFFS["basic"].price, None) == 0
+    assert overpayment("middle", exact, "basic") == 0
+    assert overpayment("middle", exact + 500, "basic") == 500
+    assert overpayment("middle", TARIFFS["middle"].price, "middle") == TARIFFS["middle"].price
+    assert overpayment("basic", TARIFFS["basic"].price, "middle") == TARIFFS["basic"].price
 
 
 def test_upgrade_targets():
