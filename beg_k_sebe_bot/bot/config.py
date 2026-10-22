@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     start_date: date = date(2026, 10, 21)
     registration_deadline: date = date(2026, 10, 25)
     kick_unpaid_date: date = date(2026, 10, 26)
+    previous_stream_start: date | None = None  # stream whose point B is collected from archive_* tables
     checkin_hour: int = 20
     weekly_summary_dow: str = "mon"
     weekly_summary_hour: int = 9

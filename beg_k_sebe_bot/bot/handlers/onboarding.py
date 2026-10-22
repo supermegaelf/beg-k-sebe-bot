@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from beg_k_sebe_bot.bot.database.models import Access, User, MovementFormatChange
 from beg_k_sebe_bot.bot.handlers.daily_checkin import checkin_reply_keyboard
+from beg_k_sebe_bot.bot.handlers.final import start_previous_final
 from beg_k_sebe_bot.bot.handlers.payment import show_tariffs
+from beg_k_sebe_bot.bot.services import archive_final
 from beg_k_sebe_bot.bot.texts import messages as msg
 from beg_k_sebe_bot.bot.utils.validators import parse_score
 
@@ -28,11 +30,18 @@ def _format_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🚶 22+ минут быстрой ходьбы", callback_data="fmt:walk_22min")],
         [InlineKeyboardButton(text="🏃 22+ минут бега", callback_data="fmt:run_22min")],
-        [InlineKeyboardButton(text="🏃 22+ минут другого действия", callback_data="fmt:own")],
+        [InlineKeyboardButton(text="🧘 22+ минут медитации", callback_data="fmt:own")],
     ])
 
 
-async def _begin_onboarding(user_id: int, username: str | None, chat: Message, state: FSMContext, session: AsyncSession) -> None:
+async def begin_onboarding(user_id: int, username: str | None, chat: Message, state: FSMContext, session: AsyncSession) -> None:
+    archived = await archive_final.pending_user(session, user_id)
+    if archived is not None:
+        # Previous-stream participants close point B first; onboarding resumes after the summary.
+        await chat.answer(msg.PREV_FINAL_BEFORE_ONBOARDING)
+        await start_previous_final(user_id, chat.bot, state, archived)
+        return
+
     existing = await session.get(User, user_id)
     if not existing:
         session.add(User(telegram_id=user_id, username=username, joined_at=datetime.now(timezone.utc)))
@@ -60,7 +69,7 @@ async def cmd_start(message: Message, state: FSMContext, session: AsyncSession) 
         await message.answer(msg.RESTART, reply_markup=checkin_reply_keyboard())
         return
 
-    await _begin_onboarding(message.from_user.id, message.from_user.username, message, state, session)
+    await begin_onboarding(message.from_user.id, message.from_user.username, message, state, session)
 
 
 @router.callback_query(F.data == "onb:start")
@@ -72,7 +81,7 @@ async def handle_onboarding_start(callback: CallbackQuery, state: FSMContext, se
     rows = [row for row in callback.message.reply_markup.inline_keyboard if row[0].callback_data != "onb:start"]
     with suppress(TelegramBadRequest):
         await callback.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
-    await _begin_onboarding(callback.from_user.id, callback.from_user.username, callback.message, state, session)
+    await begin_onboarding(callback.from_user.id, callback.from_user.username, callback.message, state, session)
 
 
 @router.message(OnboardingStates.waiting_goal)

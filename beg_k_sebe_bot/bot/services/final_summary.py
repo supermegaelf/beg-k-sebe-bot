@@ -1,4 +1,5 @@
-from datetime import timedelta
+import html
+from datetime import date, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,12 +20,15 @@ async def build_final_summary(user: User, session: AsyncSession) -> str:
             DailyCheckin.status == "answered",
         )
     )).scalars().all()
+    return render_final_summary(user, answered, settings.start_date)
 
-    onboarding_date = user.onboarding_completed_at.date() if user.onboarding_completed_at else settings.start_date
-    day_last = settings.start_date + timedelta(days=_PROGRAM_DAYS - 1)
+
+def render_final_summary(user, answered: list, start_date: date) -> str:
+    onboarding_date = user.onboarding_completed_at.date() if user.onboarding_completed_at else start_date
+    day_last = start_date + timedelta(days=_PROGRAM_DAYS - 1)
 
     s = stats.compute_stats(
-        start_date=settings.start_date,
+        start_date=start_date,
         program_days=_PROGRAM_DAYS,
         onboarding_date=onboarding_date,
         today=day_last,
@@ -34,8 +38,8 @@ async def build_final_summary(user: User, session: AsyncSession) -> str:
     if s.completion_pct < _FULL_SUMMARY_THRESHOLD_PCT:
         return msg.FINAL_FALLBACK_HEADER + _goal_block(user)
 
-    join_day = user.joined_at.date() if user.joined_at else settings.start_date
-    header_days = max(1, min((settings.final_date - join_day).days + 1, settings.final_program_day))
+    join_day = user.joined_at.date() if user.joined_at else start_date
+    header_days = max(1, min((day_last - join_day).days + 1, _PROGRAM_DAYS))
     text = msg.FINAL_SUMMARY_HEADER.format(
         days=header_days,
         days_word=pluralize(header_days, "день", "дня", "дней"),
@@ -58,18 +62,18 @@ async def build_final_summary(user: User, session: AsyncSession) -> str:
     return text
 
 
-def _goal_block(user: User) -> str:
+def _goal_block(user) -> str:
     text = msg.FINAL_GOAL_HEADER
     text += msg.FINAL_GOAL_A.format(
         score=user.point_a_score if user.point_a_score is not None else "—",
-        text=user.point_a_text or "",
+        text=html.escape(user.point_a_text or ""),
     )
     if user.point_a_score is not None and user.point_b_score is not None:
         delta = user.point_b_score - user.point_a_score
         direction = "+" if delta >= 0 else ""
         text += msg.FINAL_GOAL_B.format(
             score=user.point_b_score,
-            text=user.point_b_text or "",
+            text=html.escape(user.point_b_text or ""),
             direction=direction,
             delta=delta,
             delta_word=pluralize(abs(delta), "балл", "балла", "баллов"),

@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 _CATEGORY_LABELS = [
     ("walk", "🚶 Ходьба"),
     ("run", "🏃 Бег"),
-    ("own", "🏃 Своя активность"),
+    ("own", "🧘 Медитация"),
 ]
 
 
