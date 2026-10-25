@@ -174,7 +174,7 @@ async def _kick_unpaid(bot: Bot) -> None:
 
 
 def _kick_datetime() -> datetime:
-    return datetime.combine(settings.kick_unpaid_date, time(8, 0), tzinfo=ZoneInfo(settings.timezone))
+    return datetime.combine(settings.kick_unpaid_date, time(6, 0), tzinfo=ZoneInfo(settings.timezone))
 
 
 def build_scheduler(bot: Bot, storage: BaseStorage) -> AsyncIOScheduler:
